@@ -1,0 +1,4 @@
+interface:
+  display_name: "Firebase Auth Basics"
+  short_description: "Enable Firebase Authentication and integrate client auth flows"
+  default_prompt: "Help me enable Firebase Authentication and implement sign-in securely."

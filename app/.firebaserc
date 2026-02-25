@@ -1,0 +1,8 @@
+{
+  "projects": {
+    "default": "erp-rpg",
+    "erp-rpg": "erp-rpg"
+  },
+  "targets": {},
+  "etags": {}
+}

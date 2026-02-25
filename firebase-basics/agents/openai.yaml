@@ -1,0 +1,4 @@
+interface:
+  display_name: "Firebase Basics"
+  short_description: "Set up Firebase CLI, auth, projects, and initialization"
+  default_prompt: "Set up Firebase for a new app, including CLI install, login, project creation, and init."

@@ -1,0 +1,11 @@
+{
+  "name": "evaca-app",
+  "private": true,
+  "workspaces": [
+    "functions",
+    "web"
+  ],
+  "scripts": {
+    "build": "npm run build -w functions && npm run build -w web"
+  }
+}

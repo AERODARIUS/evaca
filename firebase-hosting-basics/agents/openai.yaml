@@ -1,0 +1,4 @@
+interface:
+  display_name: "Firebase Hosting Basics"
+  short_description: "Deploy static sites and SPAs with Firebase Hosting (Classic)"
+  default_prompt: "Help me configure and deploy my site using Firebase Hosting Classic."

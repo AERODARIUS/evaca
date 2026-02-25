@@ -1,0 +1,4 @@
+interface:
+  display_name: "Firestore Basics"
+  short_description: "Configure Firestore, rules, and SDK fundamentals"
+  default_prompt: "Help me set up Firestore, secure it with rules, and connect it to my app."
