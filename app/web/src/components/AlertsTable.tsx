@@ -1,24 +1,27 @@
 import { Fragment } from 'react';
-import { httpsCallable } from 'firebase/functions';
-import { functions } from '../lib/firebase';
 import { AlertRow } from '../types';
+import { deleteAlert, toggleAlertActive } from '../lib/alerts';
 
 interface Props {
   alerts: AlertRow[];
   expandedId: string | null;
   onExpand: (id: string) => void;
   onEdit: (alert: AlertRow) => void;
-  onDeleted: () => Promise<void>;
+  onUpdated: () => Promise<void>;
 }
 
-export function AlertsTable({ alerts, expandedId, onExpand, onEdit, onDeleted }: Props) {
+export function AlertsTable({ alerts, expandedId, onExpand, onEdit, onUpdated }: Props) {
   const onDelete = async (id: string) => {
     const confirmed = window.confirm('Are you sure you want to delete this alert?');
     if (!confirmed) return;
 
-    const fn = httpsCallable(functions, 'deleteAlert');
-    await fn({ id });
-    await onDeleted();
+    await deleteAlert(id);
+    await onUpdated();
+  };
+
+  const onToggleStatus = async (alert: AlertRow) => {
+    await toggleAlertActive(alert.id, !alert.isActive);
+    await onUpdated();
   };
 
   if (alerts.length === 0) return <p className="card">No alerts yet.</p>;
@@ -43,7 +46,7 @@ export function AlertsTable({ alerts, expandedId, onExpand, onEdit, onDeleted }:
                 <tr onClick={() => onExpand(alert.id)}>
                   <td>{alert.symbol}</td>
                   <td>{alert.targetPrice}</td>
-                  <td>{alert.status}</td>
+                  <td>{alert.isActive ? 'active' : 'paused'}</td>
                   <td>
                     <button
                       type="button"
@@ -63,6 +66,15 @@ export function AlertsTable({ alerts, expandedId, onExpand, onEdit, onDeleted }:
                     >
                       Delete
                     </button>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void onToggleStatus(alert);
+                      }}
+                    >
+                      {alert.isActive ? 'Pause' : 'Activate'}
+                    </button>
                   </td>
                 </tr>
                 {isOpen ? (
@@ -70,10 +82,10 @@ export function AlertsTable({ alerts, expandedId, onExpand, onEdit, onDeleted }:
                     <td colSpan={4}>
                       <div>
                         <p>{alert.displayName}</p>
-                        <p>Condition: {alert.condition}</p>
-                        <p>Initial price: {alert.creationPrice}</p>
-                        <p>Last price: {alert.lastSeenPrice}</p>
-                        <p>Frequency: {alert.frequencyMinutes} min</p>
+                        <p>Condition: {alert.condition === 'gte' ? 'above' : 'below'}</p>
+                        <p>Frequency: {alert.intervalMinutes} min</p>
+                        <p>Last checked: {alert.lastCheckedAt ? alert.lastCheckedAt.toLocaleString() : 'Never'}</p>
+                        <p>Last triggered: {alert.lastTriggeredAt ? alert.lastTriggeredAt.toLocaleString() : 'Never'}</p>
                       </div>
                     </td>
                   </tr>

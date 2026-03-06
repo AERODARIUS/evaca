@@ -1,16 +1,20 @@
 export type AlertCondition = 'gte' | 'lte';
+export type FirestoreAlertCondition = 'above' | 'below';
 
 export interface AlertRow {
   id: string;
+  userId: string;
   instrumentId: number;
   symbol: string;
   displayName: string;
   targetPrice: number;
   condition: AlertCondition;
-  creationPrice: number;
-  lastSeenPrice: number;
-  frequencyMinutes: number;
-  status: 'active' | 'paused' | 'triggered';
+  isActive: boolean;
+  intervalMinutes: number;
+  lastCheckedAt: Date | null;
+  lastTriggeredAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 export interface InstrumentOption {
@@ -19,7 +23,6 @@ export interface InstrumentOption {
   displayName: string;
 }
 
-export type FirestoreAlertCondition = 'above' | 'below';
 export type NotificationStatus = 'pending' | 'sent' | 'failed';
 
 export interface AlertDocument {
@@ -31,10 +34,10 @@ export interface AlertDocument {
   targetPrice: number;
   isActive: boolean;
   intervalMinutes: number;
-  lastCheckedAt: string | null;
-  lastTriggeredAt: string | null;
-  createdAt: string;
-  updatedAt: string;
+  lastCheckedAt: Date | null;
+  lastTriggeredAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 export interface NotificationDocument {

@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import { onAuthStateChanged, signOut, User } from 'firebase/auth';
-import { httpsCallable } from 'firebase/functions';
-import { auth, functions } from './lib/firebase';
+import { auth } from './lib/firebase';
 import { LoginForm } from './components/LoginForm';
 import { AlertsTable } from './components/AlertsTable';
 import { AlertForm } from './components/AlertForm';
 import { AlertRow } from './types';
+import { listAlerts as fetchAlerts } from './lib/alerts';
 
 export function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -21,10 +21,8 @@ export function App() {
 
   const loadAlerts = async () => {
     if (!user) return;
-    const fn = httpsCallable(functions, 'listAlerts');
-    const result = await fn();
-    const data = result.data as { items: AlertRow[] };
-    setAlerts(data.items);
+    const items = await fetchAlerts(user.uid);
+    setAlerts(items);
   };
 
   useEffect(() => {
@@ -50,6 +48,7 @@ export function App() {
       </header>
 
       <AlertForm
+        userId={user.uid}
         editing={editing}
         onCancelEdit={() => setEditing(null)}
         onSaved={async () => {
@@ -62,7 +61,7 @@ export function App() {
         expandedId={expandedId}
         onExpand={(id) => setExpandedId((current) => (current === id ? null : id))}
         onEdit={(alert) => setEditing(alert)}
-        onDeleted={loadAlerts}
+        onUpdated={loadAlerts}
       />
     </main>
   );

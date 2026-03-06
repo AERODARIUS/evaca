@@ -14,7 +14,7 @@
   - `notifications` collection (trigger history + delivery status)
   - Suggested alert fields: `userId`, `instrumentId`, `symbol`, `displayName`, `condition`, `targetPrice`, `isActive`, `intervalMinutes`, `lastCheckedAt`, `lastTriggeredAt`, `createdAt`, `updatedAt`
 
-- [ ] `SOTRY-3` Wire form submission to Firestore:
+- [x] `SOTRY-3` Wire form submission to Firestore:
   - Validate input client-side and server-side
   - Save alert documents to `alerts`
   - Add edit/delete/toggle active support

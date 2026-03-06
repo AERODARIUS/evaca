@@ -2,8 +2,10 @@ import { FormEvent, useEffect, useState } from 'react';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../lib/firebase';
 import { AlertRow, InstrumentOption } from '../types';
+import { createAlert, updateAlert } from '../lib/alerts';
 
 interface Props {
+  userId: string;
   editing: AlertRow | null;
   onSaved: () => Promise<void>;
   onCancelEdit: () => void;
@@ -11,7 +13,7 @@ interface Props {
 
 type NotificationChannel = 'inApp' | 'email' | 'push';
 
-export function AlertForm({ editing, onSaved, onCancelEdit }: Props) {
+export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
   const [alertName, setAlertName] = useState('');
   const [query, setQuery] = useState('');
   const [instrument, setInstrument] = useState<InstrumentOption | null>(null);
@@ -22,12 +24,21 @@ export function AlertForm({ editing, onSaved, onCancelEdit }: Props) {
   const [notificationChannels, setNotificationChannels] = useState<NotificationChannel[]>(['inApp']);
   const [isEnabled, setIsEnabled] = useState(true);
   const [currentPrice, setCurrentPrice] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!editing) {
       setAlertName('');
+      setQuery('');
+      setInstrument(null);
+      setOptions([]);
+      setTargetPrice('');
+      setCondition('gte');
+      setFrequencyMinutes('5');
+      setCurrentPrice(null);
       setIsEnabled(true);
       setNotificationChannels(['inApp']);
+      setError(null);
       return;
     }
 
@@ -39,11 +50,12 @@ export function AlertForm({ editing, onSaved, onCancelEdit }: Props) {
     setAlertName(editing.displayName);
     setTargetPrice(String(editing.targetPrice));
     setCondition(editing.condition);
-    setFrequencyMinutes(String(editing.frequencyMinutes));
-    setCurrentPrice(editing.lastSeenPrice ?? editing.creationPrice);
+    setFrequencyMinutes(String(editing.intervalMinutes));
+    setCurrentPrice(null);
     setQuery(editing.symbol);
-    setIsEnabled(editing.status === 'active');
+    setIsEnabled(editing.isActive);
     setNotificationChannels(['inApp']);
+    setError(null);
   }, [editing]);
 
   const search = async () => {
@@ -79,24 +91,35 @@ export function AlertForm({ editing, onSaved, onCancelEdit }: Props) {
 
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!instrument) return;
+    setError(null);
+
+    if (!instrument) {
+      setError('Please select an asset before saving.');
+      return;
+    }
 
     const payload = {
       instrumentId: instrument.instrumentId,
       symbol: instrument.symbol,
-      displayName: instrument.displayName,
+      displayName: alertName.trim() || instrument.displayName,
       targetPrice: Number(targetPrice),
       condition,
-      frequencyMinutes: Number(frequencyMinutes),
+      intervalMinutes: Number(frequencyMinutes),
+      isActive: isEnabled,
     };
 
-    if (editing) {
-      const fn = httpsCallable(functions, 'updateAlert');
-      await fn({ ...payload, id: editing.id });
-      onCancelEdit();
-    } else {
-      const fn = httpsCallable(functions, 'createAlert');
-      await fn(payload);
+    try {
+      if (editing) {
+        await updateAlert(editing.id, payload);
+        onCancelEdit();
+      } else {
+        await createAlert(userId, payload);
+      }
+    } catch (submitError) {
+      const message =
+        submitError instanceof Error ? submitError.message : 'Unable to save alert right now.';
+      setError(message);
+      return;
     }
 
     setAlertName('');
@@ -231,6 +254,7 @@ export function AlertForm({ editing, onSaved, onCancelEdit }: Props) {
             </button>
           ) : null}
         </div>
+        {error ? <p className="error">{error}</p> : null}
       </form>
     </section>
   );
