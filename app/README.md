@@ -10,6 +10,36 @@ Aplicación serverless para alertas de precio:
 - `functions/`: backend serverless (callable + scheduler).
 - `web/`: frontend React.
 - `firestore.rules`: reglas de seguridad.
+- `firestore.indexes.json`: índices compuestos de Firestore.
+
+## Firestore data model
+
+### `alerts` collection
+
+Campos principales:
+- `userId` (string): dueño de la alerta.
+- `instrumentId` (number): id interno del instrumento.
+- `symbol` (string): ticker/símbolo visible.
+- `displayName` (string): nombre amigable del activo.
+- `condition` (`above` | `below`): regla de disparo.
+- `targetPrice` (number): precio objetivo.
+- `isActive` (boolean): habilitada o pausada.
+- `intervalMinutes` (number): frecuencia de chequeo.
+- `lastCheckedAt` (timestamp | null): último chequeo.
+- `lastTriggeredAt` (timestamp | null): último disparo.
+- `createdAt` (timestamp): creación.
+- `updatedAt` (timestamp): última modificación.
+
+### `notifications` collection
+
+Campos principales:
+- `userId` (string): usuario propietario.
+- `alertId` (string): referencia lógica a la alerta origen.
+- `instrumentId` (number), `symbol` (string), `displayName` (string)
+- `condition` (`above` | `below`), `targetPrice` (number), `triggerPrice` (number)
+- `status` (`pending` | `sent` | `failed`)
+- `errorMessage` (string | null): error de delivery si aplica.
+- `createdAt` (timestamp): fecha de creación del evento.
 
 ## Prerrequisitos
 1. Proyecto Firebase creado.
@@ -62,6 +92,13 @@ Para frontend:
 ```bash
 cd app/web
 npm run dev
+```
+
+## Tests
+
+```bash
+cd app
+npm run test
 ```
 
 ## Deploy

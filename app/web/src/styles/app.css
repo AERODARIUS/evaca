@@ -29,6 +29,10 @@ body {
   align-items: center;
 }
 
+.wrap {
+  flex-wrap: wrap;
+}
+
 .between {
   justify-content: space-between;
 }
@@ -43,6 +47,31 @@ label {
   gap: 0.4rem;
 }
 
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.channels-fieldset {
+  border: 1px solid #dce3e8;
+  border-radius: 10px;
+  padding: 0.6rem 0.8rem;
+  margin: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.channels-fieldset legend {
+  padding: 0 0.3rem;
+}
+
+.field-help {
+  margin: 0;
+  color: #4d5d6d;
+  font-size: 0.9rem;
+}
+
 input,
 select,
 button {
@@ -52,6 +81,32 @@ button {
 
 button {
   cursor: pointer;
+}
+
+.auth-actions {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.auth-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+}
+
+.auth-switch button {
+  border: 1px solid #d5dde5;
+  background: #f7f9fb;
+}
+
+.auth-switch-active {
+  background: #e9f2ff !important;
+  border-color: #92b5e8 !important;
+}
+
+.button-secondary {
+  background: #f7f9fb;
+  border: 1px solid #d5dde5;
 }
 
 table {

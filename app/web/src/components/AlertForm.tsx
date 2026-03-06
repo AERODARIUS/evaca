@@ -9,27 +9,41 @@ interface Props {
   onCancelEdit: () => void;
 }
 
+type NotificationChannel = 'inApp' | 'email' | 'push';
+
 export function AlertForm({ editing, onSaved, onCancelEdit }: Props) {
+  const [alertName, setAlertName] = useState('');
   const [query, setQuery] = useState('');
   const [instrument, setInstrument] = useState<InstrumentOption | null>(null);
   const [options, setOptions] = useState<InstrumentOption[]>([]);
   const [targetPrice, setTargetPrice] = useState('');
   const [condition, setCondition] = useState<'gte' | 'lte'>('gte');
   const [frequencyMinutes, setFrequencyMinutes] = useState('5');
+  const [notificationChannels, setNotificationChannels] = useState<NotificationChannel[]>(['inApp']);
+  const [isEnabled, setIsEnabled] = useState(true);
   const [currentPrice, setCurrentPrice] = useState<number | null>(null);
 
   useEffect(() => {
-    if (!editing) return;
+    if (!editing) {
+      setAlertName('');
+      setIsEnabled(true);
+      setNotificationChannels(['inApp']);
+      return;
+    }
+
     setInstrument({
       instrumentId: editing.instrumentId,
       symbol: editing.symbol,
       displayName: editing.displayName,
     });
+    setAlertName(editing.displayName);
     setTargetPrice(String(editing.targetPrice));
     setCondition(editing.condition);
     setFrequencyMinutes(String(editing.frequencyMinutes));
     setCurrentPrice(editing.lastSeenPrice ?? editing.creationPrice);
     setQuery(editing.symbol);
+    setIsEnabled(editing.status === 'active');
+    setNotificationChannels(['inApp']);
   }, [editing]);
 
   const search = async () => {
@@ -50,6 +64,17 @@ export function AlertForm({ editing, onSaved, onCancelEdit }: Props) {
   const onSelect = async (item: InstrumentOption) => {
     setInstrument(item);
     await loadRate(item.instrumentId);
+  };
+
+  const onToggleChannel = (channel: NotificationChannel) => {
+    setNotificationChannels((current) => {
+      if (current.includes(channel)) {
+        const next = current.filter((item) => item !== channel);
+        return next.length > 0 ? next : ['inApp'];
+      }
+
+      return [...current, channel];
+    });
   };
 
   const onSubmit = async (event: FormEvent) => {
@@ -74,26 +99,44 @@ export function AlertForm({ editing, onSaved, onCancelEdit }: Props) {
       await fn(payload);
     }
 
+    setAlertName('');
     setQuery('');
     setInstrument(null);
     setOptions([]);
     setTargetPrice('');
     setCondition('gte');
     setFrequencyMinutes('5');
+    setNotificationChannels(['inApp']);
+    setIsEnabled(true);
     setCurrentPrice(null);
     await onSaved();
   };
 
   return (
     <section className="card">
-      <h2>{editing ? 'Editar alerta' : 'Nueva alerta'}</h2>
+      <h2>{editing ? 'Edit alert' : 'New alert'}</h2>
       <form onSubmit={onSubmit}>
         <label>
-          Nombre del activo
+          Alert name
+          <input
+            value={alertName}
+            onChange={(e) => setAlertName(e.target.value)}
+            placeholder="BTC breakout alert"
+            required
+          />
+        </label>
+
+        <label>
+          Asset selector (symbol/search)
           <div className="row">
-            <input value={query} onChange={(e) => setQuery(e.target.value)} required />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="AAPL, BTC, TSLA"
+              required
+            />
             <button type="button" onClick={search}>
-              Buscar
+              Search
             </button>
           </div>
         </label>
@@ -110,11 +153,19 @@ export function AlertForm({ editing, onSaved, onCancelEdit }: Props) {
           </ul>
         ) : null}
 
-        {instrument ? <p>Seleccionado: {instrument.symbol}</p> : null}
-        {currentPrice !== null ? <p>Precio actual: {currentPrice}</p> : null}
+        {instrument ? <p>Selected: {instrument.symbol}</p> : null}
+        {currentPrice !== null ? <p>Current price: {currentPrice}</p> : null}
 
         <label>
-          Precio objetivo
+          Condition
+          <select value={condition} onChange={(e) => setCondition(e.target.value as 'gte' | 'lte')}>
+            <option value="gte">Above</option>
+            <option value="lte">Below</option>
+          </select>
+        </label>
+
+        <label>
+          Target price
           <input
             type="number"
             step="0.0001"
@@ -125,15 +176,7 @@ export function AlertForm({ editing, onSaved, onCancelEdit }: Props) {
         </label>
 
         <label>
-          Condición
-          <select value={condition} onChange={(e) => setCondition(e.target.value as 'gte' | 'lte')}>
-            <option value="gte">Mayor o igual</option>
-            <option value="lte">Menor o igual</option>
-          </select>
-        </label>
-
-        <label>
-          Frecuencia de chequeo (min)
+          Check interval (minutes)
           <input
             type="number"
             min={1}
@@ -144,11 +187,47 @@ export function AlertForm({ editing, onSaved, onCancelEdit }: Props) {
           />
         </label>
 
+        <fieldset className="channels-fieldset">
+          <legend>Notification channel(s)</legend>
+          <div className="row wrap">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={notificationChannels.includes('inApp')}
+                onChange={() => onToggleChannel('inApp')}
+              />
+              In-app
+            </label>
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={notificationChannels.includes('email')}
+                onChange={() => onToggleChannel('email')}
+              />
+              Email
+            </label>
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={notificationChannels.includes('push')}
+                onChange={() => onToggleChannel('push')}
+              />
+              Push
+            </label>
+          </div>
+          <p className="field-help">Delivery setup is wired in later tasks; this UI now captures selection.</p>
+        </fieldset>
+
+        <label className="checkbox-label">
+          <input type="checkbox" checked={isEnabled} onChange={(e) => setIsEnabled(e.target.checked)} />
+          Enabled status
+        </label>
+
         <div className="row">
-          <button type="submit">Guardar alerta</button>
+          <button type="submit">Save alert</button>
           {editing ? (
             <button type="button" onClick={onCancelEdit}>
-              Cancelar edición
+              Cancel edit
             </button>
           ) : null}
         </div>

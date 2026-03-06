@@ -2,17 +2,138 @@ rules_version='2'
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidAlertCondition(condition) {
+      return condition in ['above', 'below', 'gte', 'lte'];
+    }
+
+    function hasRequiredAlertFields(data) {
+      return data.keys().hasAll([
+        'userId',
+        'instrumentId',
+        'symbol',
+        'displayName',
+        'condition',
+        'targetPrice',
+        'isActive',
+        'intervalMinutes',
+        'lastCheckedAt',
+        'lastTriggeredAt',
+        'createdAt',
+        'updatedAt'
+      ]);
+    }
+
+    function hasOnlyAlertFields(data) {
+      return data.keys().hasOnly([
+        'userId',
+        'instrumentId',
+        'symbol',
+        'displayName',
+        'condition',
+        'targetPrice',
+        'isActive',
+        'intervalMinutes',
+        'lastCheckedAt',
+        'lastTriggeredAt',
+        'createdAt',
+        'updatedAt'
+      ]);
+    }
+
+    function isValidAlertPayload(data) {
+      return hasRequiredAlertFields(data)
+        && hasOnlyAlertFields(data)
+        && data.userId is string
+        && data.instrumentId is int
+        && data.symbol is string
+        && data.displayName is string
+        && isValidAlertCondition(data.condition)
+        && data.targetPrice is number
+        && data.isActive is bool
+        && data.intervalMinutes is int
+        && data.intervalMinutes > 0
+        && data.intervalMinutes <= 1440
+        && (data.lastCheckedAt == null || data.lastCheckedAt is timestamp)
+        && (data.lastTriggeredAt == null || data.lastTriggeredAt is timestamp)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    match /alerts/{alertId} {
+      allow read: if isOwner(resource.data.userId);
+      allow create: if isValidAlertPayload(request.resource.data)
+        && isOwner(request.resource.data.userId);
+      allow update: if isOwner(resource.data.userId)
+        && isValidAlertPayload(request.resource.data)
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isOwner(resource.data.userId);
+    }
+
+    function hasRequiredNotificationFields(data) {
+      return data.keys().hasAll([
+        'userId',
+        'alertId',
+        'instrumentId',
+        'symbol',
+        'displayName',
+        'condition',
+        'targetPrice',
+        'triggerPrice',
+        'status',
+        'errorMessage',
+        'createdAt'
+      ]);
+    }
+
+    function hasOnlyNotificationFields(data) {
+      return data.keys().hasOnly([
+        'userId',
+        'alertId',
+        'instrumentId',
+        'symbol',
+        'displayName',
+        'condition',
+        'targetPrice',
+        'triggerPrice',
+        'status',
+        'errorMessage',
+        'createdAt'
+      ]);
+    }
+
+    function isValidNotificationPayload(data) {
+      return hasRequiredNotificationFields(data)
+        && hasOnlyNotificationFields(data)
+        && data.userId is string
+        && data.alertId is string
+        && data.instrumentId is int
+        && data.symbol is string
+        && data.displayName is string
+        && isValidAlertCondition(data.condition)
+        && data.targetPrice is number
+        && data.triggerPrice is number
+        && data.status in ['pending', 'sent', 'failed']
+        && (data.errorMessage == null || data.errorMessage is string)
+        && data.createdAt is timestamp;
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if isOwner(resource.data.userId);
+      // Notification writes should come from privileged backend code (Admin SDK).
+      allow create, update, delete: if false;
+    }
+
     match /{document=**} {
-      // This rule allows anyone with your database reference to view, edit,
-      // and delete all data in your database. It is useful for getting
-      // started, but it is configured to expire after 30 days because it
-      // leaves your app open to attackers. At that time, all client
-      // requests to your database will be denied.
-      //
-      // Make sure to write security rules for your app before that time, or
-      // else all client requests to your database will be denied until you
-      // update your rules.
-      allow read, write: if request.time < timestamp.date(2026, 3, 27);
+      allow read, write: if false;
     }
   }
 }

@@ -2,10 +2,12 @@
   "name": "evaca-app",
   "private": true,
   "workspaces": [
-    "functions",
     "web"
   ],
   "scripts": {
-    "build": "npm run build -w functions && npm run build -w web"
+    "dev": "npm run dev -w web",
+    "build": "npm run build -w web",
+    "preview": "npm run preview -w web",
+    "test": "npm run test -w web"
   }
 }

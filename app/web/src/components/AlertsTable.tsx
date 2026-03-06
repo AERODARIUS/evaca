@@ -13,7 +13,7 @@ interface Props {
 
 export function AlertsTable({ alerts, expandedId, onExpand, onEdit, onDeleted }: Props) {
   const onDelete = async (id: string) => {
-    const confirmed = window.confirm('¿Seguro que querés borrar esta alerta?');
+    const confirmed = window.confirm('Are you sure you want to delete this alert?');
     if (!confirmed) return;
 
     const fn = httpsCallable(functions, 'deleteAlert');
@@ -21,18 +21,18 @@ export function AlertsTable({ alerts, expandedId, onExpand, onEdit, onDeleted }:
     await onDeleted();
   };
 
-  if (alerts.length === 0) return <p className="card">No hay alertas.</p>;
+  if (alerts.length === 0) return <p className="card">No alerts yet.</p>;
 
   return (
     <section className="card">
-      <h2>Alertas</h2>
+      <h2>Alerts</h2>
       <table>
         <thead>
           <tr>
-            <th>Activo</th>
-            <th>Objetivo</th>
-            <th>Estado</th>
-            <th>Acciones</th>
+            <th>Asset</th>
+            <th>Target</th>
+            <th>Status</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -52,7 +52,7 @@ export function AlertsTable({ alerts, expandedId, onExpand, onEdit, onDeleted }:
                         onEdit(alert);
                       }}
                     >
-                      Editar
+                      Edit
                     </button>
                     <button
                       type="button"
@@ -61,7 +61,7 @@ export function AlertsTable({ alerts, expandedId, onExpand, onEdit, onDeleted }:
                         void onDelete(alert.id);
                       }}
                     >
-                      Borrar
+                      Delete
                     </button>
                   </td>
                 </tr>
@@ -70,10 +70,10 @@ export function AlertsTable({ alerts, expandedId, onExpand, onEdit, onDeleted }:
                     <td colSpan={4}>
                       <div>
                         <p>{alert.displayName}</p>
-                        <p>Condición: {alert.condition}</p>
-                        <p>Precio inicial: {alert.creationPrice}</p>
-                        <p>Último precio: {alert.lastSeenPrice}</p>
-                        <p>Frecuencia: {alert.frequencyMinutes} min</p>
+                        <p>Condition: {alert.condition}</p>
+                        <p>Initial price: {alert.creationPrice}</p>
+                        <p>Last price: {alert.lastSeenPrice}</p>
+                        <p>Frequency: {alert.frequencyMinutes} min</p>
                       </div>
                     </td>
                   </tr>
