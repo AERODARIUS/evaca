@@ -2,12 +2,22 @@
   "name": "evaca-app",
   "private": true,
   "workspaces": [
-    "web"
+    "web",
+    "functions"
   ],
   "scripts": {
-    "dev": "npm run dev -w web",
-    "build": "npm run build -w web",
-    "preview": "npm run preview -w web",
-    "test": "npm run test -w web"
+    "dev": "npm run web:dev",
+    "build": "npm run web:build && npm run functions:build",
+    "preview": "npm run web:preview",
+    "test": "npm run web:test",
+    "web:dev": "npm run dev -w web",
+    "web:build": "npm run build -w web",
+    "web:preview": "npm run preview -w web",
+    "web:test": "npm run test -w web",
+    "functions:lint": "npm run lint -w functions",
+    "functions:build": "npm run build -w functions",
+    "web:deploy": "npm run web:build && mkdir -p dist && rsync -a --delete web/dist/ dist/ && firebase deploy --only hosting",
+    "functions:deploy": "npm run functions:lint && npm run functions:build && firebase deploy --only functions",
+    "deploy": "npm run functions:deploy && npm run web:deploy"
   }
 }
