@@ -9,6 +9,7 @@ import { listAlerts as fetchAlerts } from './lib/alerts';
 
 export function App() {
   const [user, setUser] = useState<User | null>(null);
+  const [authReady, setAuthReady] = useState(false);
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editing, setEditing] = useState<AlertRow | null>(null);
@@ -16,6 +17,7 @@ export function App() {
   useEffect(() => {
     return onAuthStateChanged(auth, (nextUser) => {
       setUser(nextUser);
+      setAuthReady(true);
     });
   }, []);
 
@@ -29,6 +31,16 @@ export function App() {
     if (!user) return;
     void loadAlerts();
   }, [user]);
+
+  if (!authReady) {
+    return (
+      <main className="loading-screen">
+        <div className="loading-orb" aria-hidden="true" />
+        <p className="loading-title">eVaca</p>
+        <p className="loading-subtitle">Preparing your alerts...</p>
+      </main>
+    );
+  }
 
   if (!user) {
     return (
