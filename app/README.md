@@ -46,7 +46,7 @@ Campos principales:
 2. Auth (Email/Password) habilitado.
 3. Firestore habilitado.
 4. Node.js 20.
-5. Claves eToro (app key + user key).
+5. Claves eToro (api key + user key).
 6. Opcional: extensión `Trigger Email` de Firebase para procesar docs en `mail`.
 
 ## Setup
@@ -61,7 +61,7 @@ npm install
 3. Definir secretos para Functions:
 
 ```bash
-firebase functions:secrets:set ETORO_APP_KEY
+firebase functions:secrets:set ETORO_API_KEY
 firebase functions:secrets:set ETORO_USER_KEY
 ```
 

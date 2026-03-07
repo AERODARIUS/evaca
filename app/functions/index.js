@@ -2,7 +2,7 @@ const { randomUUID } = require("crypto");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
 
-const ETORO_APP_KEY = defineSecret("ETORO_APP_KEY");
+const ETORO_API_KEY = defineSecret("ETORO_API_KEY");
 const ETORO_USER_KEY = defineSecret("ETORO_USER_KEY");
 const ETORO_BASE_URL = "https://public-api.etoro.com/api/v1";
 
@@ -105,14 +105,14 @@ function extractPrice(item) {
   return null;
 }
 
-async function callEtoro(path, appKey, userKey) {
+async function callEtoro(path, apiKey, userKey) {
   let response;
   try {
     response = await fetch(`${ETORO_BASE_URL}${path}`, {
       method: "GET",
       headers: {
         "x-request-id": randomUUID(),
-        "x-api-key": appKey,
+        "x-api-key": apiKey,
         "x-user-key": userKey,
       },
     });
@@ -186,7 +186,7 @@ function requireSecretValue(secret, label) {
 
 exports.searchEtoroInstruments = onCall(
   {
-    secrets: [ETORO_APP_KEY, ETORO_USER_KEY],
+    secrets: [ETORO_API_KEY, ETORO_USER_KEY],
     cors: true,
   },
   async (request) => {
@@ -197,7 +197,7 @@ exports.searchEtoroInstruments = onCall(
 
     const fields = ["instrumentId", "internalSymbolFull", "displayname"].join(",");
     const candidates = buildSearchCandidates(searchText);
-    const appKey = requireSecretValue(ETORO_APP_KEY, "ETORO_APP_KEY");
+    const apiKey = requireSecretValue(ETORO_API_KEY, "ETORO_API_KEY");
     const userKey = requireSecretValue(ETORO_USER_KEY, "ETORO_USER_KEY");
 
     let items = [];
@@ -212,7 +212,7 @@ exports.searchEtoroInstruments = onCall(
       });
 
       try {
-        const payload = await callEtoro(`/market-data/search?${query.toString()}`, appKey, userKey);
+        const payload = await callEtoro(`/market-data/search?${query.toString()}`, apiKey, userKey);
         items = extractItems(payload)
           .map(normalizeInstrument)
           .filter((item) => item !== null);
@@ -235,7 +235,7 @@ exports.searchEtoroInstruments = onCall(
 
 exports.getEtoroInstrumentRate = onCall(
   {
-    secrets: [ETORO_APP_KEY, ETORO_USER_KEY],
+    secrets: [ETORO_API_KEY, ETORO_USER_KEY],
     cors: true,
   },
   async (request) => {
@@ -247,10 +247,10 @@ exports.getEtoroInstrumentRate = onCall(
     const query = new URLSearchParams({
       instrumentIds: String(instrumentId),
     });
-    const appKey = requireSecretValue(ETORO_APP_KEY, "ETORO_APP_KEY");
+    const apiKey = requireSecretValue(ETORO_API_KEY, "ETORO_API_KEY");
     const userKey = requireSecretValue(ETORO_USER_KEY, "ETORO_USER_KEY");
 
-    const payload = await callEtoro(`/market-data/instruments/rates?${query.toString()}`, appKey, userKey);
+    const payload = await callEtoro(`/market-data/instruments/rates?${query.toString()}`, apiKey, userKey);
 
     const items = extractItems(payload);
     const exactItem = items.find((item) => {

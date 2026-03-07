@@ -20,7 +20,7 @@
   - Add edit/delete/toggle active support
 
 - [ ] `SOTRY-4` Integrate eToro market data via Cloud Functions:
-  - Use secrets `ETORO_APP_KEY` and `ETORO_USER_KEY`
+  - Use secrets `ETORO_API_KEY` and `ETORO_USER_KEY`
   - Add callable/HTTP function to search assets (`/market-data/search`)
   - Add function to fetch current rates (`/market-data/instruments/rates`)
   - Map eToro response to internal alert asset shape
