@@ -12,6 +12,50 @@ interface Props {
 }
 
 type NotificationChannel = 'inApp' | 'email' | 'push';
+type SearchFeedbackType = 'error' | 'info';
+
+interface CallableErrorLike {
+  code?: string;
+  message?: string;
+}
+
+function getSearchErrorMessage(error: unknown, searchText: string): string {
+  const fallback = `We couldn't search assets for "${searchText}" right now. Please try again.`;
+  if (!error || typeof error !== 'object') {
+    return fallback;
+  }
+
+  const callableError = error as CallableErrorLike;
+
+  switch (callableError.code) {
+    case 'functions/invalid-argument':
+      return 'Enter a symbol or asset name before searching (for example: XRP, BTC, AAPL).';
+    case 'functions/unauthenticated':
+      return 'Your session expired. Sign in again and retry the search.';
+    case 'functions/permission-denied':
+      return 'Search is currently blocked for this account. Check your Firebase/eToro setup.';
+    case 'functions/not-found':
+      return `No assets found for "${searchText}". Try a ticker symbol (XRP, BTC, TSLA).`;
+    case 'functions/unavailable':
+    case 'functions/deadline-exceeded':
+      return 'The eToro search service is temporarily unavailable. Please retry in a few seconds.';
+    case 'functions/internal':
+    case 'functions/unknown':
+      return 'Search failed in Cloud Functions. Check Functions deployment and logs for eToro errors.';
+    case 'functions/failed-precondition':
+      return 'Search is misconfigured: missing eToro API secrets in Functions.';
+    default:
+      break;
+  }
+
+  if (typeof callableError.message === 'string' && callableError.message.length > 0) {
+    if (callableError.message.toLowerCase().includes('secret')) {
+      return 'Search is misconfigured: missing eToro API secrets in Functions.';
+    }
+  }
+
+  return fallback;
+}
 
 export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
   const [alertName, setAlertName] = useState('');
@@ -25,6 +69,10 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
   const [isEnabled, setIsEnabled] = useState(true);
   const [currentPrice, setCurrentPrice] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [searchFeedback, setSearchFeedback] = useState<string | null>(null);
+  const [searchFeedbackType, setSearchFeedbackType] = useState<SearchFeedbackType | null>(null);
+  const [isSearching, setIsSearching] = useState(false);
+  const [isLoadingPrice, setIsLoadingPrice] = useState(false);
 
   useEffect(() => {
     if (!editing) {
@@ -39,6 +87,10 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
       setIsEnabled(true);
       setNotificationChannels(['inApp']);
       setError(null);
+      setSearchFeedback(null);
+      setSearchFeedbackType(null);
+      setIsSearching(false);
+      setIsLoadingPrice(false);
       return;
     }
 
@@ -56,25 +108,67 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
     setIsEnabled(editing.isActive);
     setNotificationChannels(['inApp']);
     setError(null);
+    setSearchFeedback(null);
+    setSearchFeedbackType(null);
+    setIsSearching(false);
+    setIsLoadingPrice(false);
   }, [editing]);
 
   const search = async () => {
-    if (!query.trim()) return;
-    const fn = httpsCallable(functions, 'searchEtoroInstruments');
-    const result = await fn({ searchText: query });
-    const data = result.data as { items: InstrumentOption[] };
-    setOptions(data.items);
+    const searchText = query.trim();
+    if (!searchText) {
+      setOptions([]);
+      setSearchFeedback('Enter a symbol or asset name before searching.');
+      setSearchFeedbackType('info');
+      return;
+    }
+
+    setError(null);
+    setSearchFeedback(null);
+    setSearchFeedbackType(null);
+    setIsSearching(true);
+
+    try {
+      const fn = httpsCallable(functions, 'searchEtoroInstruments');
+      const result = await fn({ searchText });
+      const data = result.data as { items: InstrumentOption[] };
+      setOptions(data.items);
+      if (data.items.length === 0) {
+        setSearchFeedback(`No assets found for "${searchText}". Try a ticker like XRP, BTC, or TSLA.`);
+        setSearchFeedbackType('info');
+      }
+    } catch (searchError) {
+      setSearchFeedback(getSearchErrorMessage(searchError, searchText));
+      setSearchFeedbackType('error');
+      setOptions([]);
+    } finally {
+      setIsSearching(false);
+    }
   };
 
   const loadRate = async (instrumentId: number) => {
-    const fn = httpsCallable(functions, 'getEtoroInstrumentRate');
-    const result = await fn({ instrumentId });
-    const data = result.data as { rate: number };
-    setCurrentPrice(data.rate);
+    setError(null);
+    setIsLoadingPrice(true);
+
+    try {
+      const fn = httpsCallable(functions, 'getEtoroInstrumentRate');
+      const result = await fn({ instrumentId });
+      const data = result.data as { rate: number };
+      setCurrentPrice(data.rate);
+    } catch (rateError) {
+      const message =
+        rateError instanceof Error ? rateError.message : 'Unable to load instrument rate right now.';
+      setError(message);
+      setCurrentPrice(null);
+    } finally {
+      setIsLoadingPrice(false);
+    }
   };
 
   const onSelect = async (item: InstrumentOption) => {
     setInstrument(item);
+    setSearchFeedback(null);
+    setSearchFeedbackType(null);
     await loadRate(item.instrumentId);
   };
 
@@ -154,12 +248,18 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
           <div className="row">
             <input
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                if (searchFeedback) {
+                  setSearchFeedback(null);
+                  setSearchFeedbackType(null);
+                }
+              }}
               placeholder="AAPL, BTC, TSLA"
               required
             />
-            <button type="button" onClick={search}>
-              Search
+            <button type="button" onClick={search} disabled={isSearching}>
+              {isSearching ? 'Searching...' : 'Search'}
             </button>
           </div>
         </label>
@@ -175,8 +275,14 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
             ))}
           </ul>
         ) : null}
+        {searchFeedback ? (
+          <p className={searchFeedbackType === 'error' ? 'error' : 'field-help'} role="status">
+            {searchFeedback}
+          </p>
+        ) : null}
 
         {instrument ? <p>Selected: {instrument.symbol}</p> : null}
+        {isLoadingPrice ? <p>Loading current price...</p> : null}
         {currentPrice !== null ? <p>Current price: {currentPrice}</p> : null}
 
         <label>
