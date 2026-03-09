@@ -212,7 +212,7 @@
   - Priority: `P2`
   - Effort: `M`
 
-- [ ] `STORY-20260309-004` Enforce backend code quality gates in CI
+- [x] `STORY-20260309-004` Enforce backend code quality gates in CI
   - Type: `quality`
   - Area: `testing`
   - Problem: `functions:lint` is a no-op (`echo 'No lint configured'`), so CI currently reports green without backend static checks.

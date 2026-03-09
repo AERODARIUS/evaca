@@ -18,6 +18,7 @@
     "web:test:e2e:ui": "npm run test:e2e:ui -w web",
     "functions:lint": "npm run lint -w functions",
     "functions:build": "npm run build -w functions",
+    "functions:test:coverage": "npm run test:coverage -w functions",
     "web:deploy": "npm run web:build && mkdir -p dist && rsync -a --delete web/dist/ dist/ && firebase deploy --only hosting",
     "functions:deploy": "npm run functions:lint && npm run functions:build && firebase deploy --only functions",
     "deploy": "npm run functions:deploy && npm run web:deploy",

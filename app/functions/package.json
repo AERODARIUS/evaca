@@ -6,9 +6,10 @@
     "node": "20"
   },
   "scripts": {
-    "lint": "echo 'No lint configured'",
+    "lint": "node scripts/lint.js",
     "build": "echo 'No build step required'",
-    "test": "node --test"
+    "test": "node --test",
+    "test:coverage": "node scripts/testCoverage.js"
   },
   "dependencies": {
     "firebase-admin": "^12.7.0",

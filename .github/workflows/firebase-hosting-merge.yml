@@ -6,15 +6,26 @@ on:
   push:
     branches:
       - main
+permissions:
+  contents: read
 jobs:
   build_and_deploy:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
     steps:
       - uses: actions/checkout@v4
-      - run: npm ci && npm run lint && npm run test && npm run build
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci && npm run functions:lint && npm run functions:test:coverage && npm run test && npm run build
       - uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_ERP_RPG }}
           channelId: live
           projectId: erp-rpg
+          entryPoint: app
