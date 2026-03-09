@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { onAuthStateChanged, signOut, User } from 'firebase/auth';
+import { Button, Card, Typography } from 'antd';
 import { auth } from './lib/firebase';
 import { LoginForm } from './components/LoginForm';
 import { AlertsTable } from './components/AlertsTable';
@@ -13,6 +14,7 @@ export function App() {
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editing, setEditing] = useState<AlertRow | null>(null);
+  const [isAlertsLoading, setIsAlertsLoading] = useState(false);
 
   useEffect(() => {
     return onAuthStateChanged(auth, (nextUser) => {
@@ -22,13 +24,23 @@ export function App() {
   }, []);
 
   const loadAlerts = async () => {
-    if (!user) return;
-    const items = await fetchAlerts(user.uid);
-    setAlerts(items);
+    if (!user) {
+      return;
+    }
+
+    setIsAlertsLoading(true);
+    try {
+      const items = await fetchAlerts(user.uid);
+      setAlerts(items);
+    } finally {
+      setIsAlertsLoading(false);
+    }
   };
 
   useEffect(() => {
-    if (!user) return;
+    if (!user) {
+      return;
+    }
     void loadAlerts();
   }, [user]);
 
@@ -52,12 +64,14 @@ export function App() {
 
   return (
     <main className="container">
-      <header className="card row between">
-        <p>{user.email}</p>
-        <button type="button" onClick={() => signOut(auth)}>
-          Logout
-        </button>
-      </header>
+      <Card className="card-surface">
+        <div className="row between">
+          <Typography.Text>{user.email}</Typography.Text>
+          <Button type="default" onClick={() => signOut(auth)}>
+            Logout
+          </Button>
+        </div>
+      </Card>
 
       <AlertForm
         userId={user.uid}
@@ -71,9 +85,10 @@ export function App() {
       <AlertsTable
         alerts={alerts}
         expandedId={expandedId}
-        onExpand={(id) => setExpandedId((current) => (current === id ? null : id))}
+        onExpand={(id) => setExpandedId(id || null)}
         onEdit={(alert) => setEditing(alert)}
         onUpdated={loadAlerts}
+        isLoading={isAlertsLoading}
       />
     </main>
   );

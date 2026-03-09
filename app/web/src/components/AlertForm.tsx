@@ -8,6 +8,7 @@ import {
   Input,
   InputNumber,
   Select,
+  Skeleton,
   Space,
   Spin,
   Switch,
@@ -379,10 +380,7 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
           <Alert className="form-alert" type={searchStatusTone} showIcon message={searchFeedback} />
 
           {searchState === 'loading' ? (
-            <Space>
-              <Spin size="small" />
-              <Typography.Text>Loading results...</Typography.Text>
-            </Space>
+            <Skeleton active paragraph={{ rows: 2 }} title={false} />
           ) : null}
 
           {searchState === 'results' ? (

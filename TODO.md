@@ -104,7 +104,7 @@
   - Submitted payload always matches visible toggle state.
   - Icon, label, and stored value stay synchronized.
 
-- [ ] `SOTRY-13` UI consistency and interaction standards
+- [x] `SOTRY-13` UI consistency and interaction standards
   - Product goal: make the page feel cohesive, predictable, and faster to scan.
   - Scope:
   - Standardize spacing scale, heading styles, and field alignment.
