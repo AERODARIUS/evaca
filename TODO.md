@@ -49,7 +49,7 @@
   - Integration tests for alert creation + trigger flow
   - Emulator tests for Firestore + Functions
 
-- [ ] `SOTRY-9` Deployment checklist:
+- [x] `SOTRY-9` Deployment checklist:
   - Confirm secrets are configured in Functions runtime
   - Deploy Firestore indexes/rules
   - Deploy Cloud Functions

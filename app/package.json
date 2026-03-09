@@ -22,6 +22,7 @@
     "web:deploy": "npm run web:build && mkdir -p dist && rsync -a --delete web/dist/ dist/ && firebase deploy --only hosting",
     "functions:deploy": "npm run functions:lint && npm run functions:build && firebase deploy --only functions",
     "deploy": "npm run functions:deploy && npm run web:deploy",
-    "functions:test": "npm run test -w functions"
+    "functions:test": "npm run test -w functions",
+    "deploy:checklist": "node scripts/deploymentChecklist.js"
   }
 }
