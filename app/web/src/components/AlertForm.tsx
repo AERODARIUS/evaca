@@ -1,8 +1,23 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
+import {
+  Alert,
+  Button,
+  Card,
+  Checkbox,
+  Form,
+  Input,
+  InputNumber,
+  Select,
+  Space,
+  Spin,
+  Switch,
+  Typography,
+} from 'antd';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../lib/firebase';
 import { AlertRow, InstrumentOption } from '../types';
 import { createAlert, updateAlert } from '../lib/alerts';
+import { ActionBar, FieldHint, FormRow, PageSection } from './primitives';
 
 interface Props {
   userId: string;
@@ -62,9 +77,9 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
   const [query, setQuery] = useState('');
   const [instrument, setInstrument] = useState<InstrumentOption | null>(null);
   const [options, setOptions] = useState<InstrumentOption[]>([]);
-  const [targetPrice, setTargetPrice] = useState('');
+  const [targetPrice, setTargetPrice] = useState<number | null>(null);
   const [condition, setCondition] = useState<'gte' | 'lte'>('gte');
-  const [frequencyMinutes, setFrequencyMinutes] = useState('5');
+  const [frequencyMinutes, setFrequencyMinutes] = useState<number>(5);
   const [notificationChannels, setNotificationChannels] = useState<NotificationChannel[]>(['inApp']);
   const [isEnabled, setIsEnabled] = useState(true);
   const [currentPrice, setCurrentPrice] = useState<number | null>(null);
@@ -80,9 +95,9 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
       setQuery('');
       setInstrument(null);
       setOptions([]);
-      setTargetPrice('');
+      setTargetPrice(null);
       setCondition('gte');
-      setFrequencyMinutes('5');
+      setFrequencyMinutes(5);
       setCurrentPrice(null);
       setIsEnabled(true);
       setNotificationChannels(['inApp']);
@@ -100,9 +115,9 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
       displayName: editing.displayName,
     });
     setAlertName(editing.displayName);
-    setTargetPrice(String(editing.targetPrice));
+    setTargetPrice(editing.targetPrice);
     setCondition(editing.condition);
-    setFrequencyMinutes(String(editing.intervalMinutes));
+    setFrequencyMinutes(editing.intervalMinutes);
     setCurrentPrice(null);
     setQuery(editing.symbol);
     setIsEnabled(editing.isActive);
@@ -113,6 +128,15 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
     setIsSearching(false);
     setIsLoadingPrice(false);
   }, [editing]);
+
+  const searchOptions = useMemo(
+    () =>
+      options.map((item) => ({
+        value: String(item.instrumentId),
+        label: `${item.symbol} - ${item.displayName}`,
+      })),
+    [options],
+  );
 
   const search = async () => {
     const searchText = query.trim();
@@ -165,18 +189,27 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
     }
   };
 
-  const onSelect = async (item: InstrumentOption) => {
-    setInstrument(item);
+  const onSelect = async (instrumentIdAsText: string) => {
+    const selected = options.find((item) => String(item.instrumentId) === instrumentIdAsText);
+    if (!selected) {
+      return;
+    }
+
+    setInstrument(selected);
     setSearchFeedback(null);
     setSearchFeedbackType(null);
-    await loadRate(item.instrumentId);
+    await loadRate(selected.instrumentId);
   };
 
-  const onToggleChannel = (channel: NotificationChannel) => {
+  const onToggleChannel = (channel: NotificationChannel, checked: boolean) => {
     setNotificationChannels((current) => {
-      if (current.includes(channel)) {
+      if (!checked) {
         const next = current.filter((item) => item !== channel);
         return next.length > 0 ? next : ['inApp'];
+      }
+
+      if (current.includes(channel)) {
+        return current;
       }
 
       return [...current, channel];
@@ -192,13 +225,18 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
       return;
     }
 
+    if (targetPrice === null || Number.isNaN(targetPrice)) {
+      setError('Please provide a valid target price.');
+      return;
+    }
+
     const payload = {
       instrumentId: instrument.instrumentId,
       symbol: instrument.symbol,
       displayName: alertName.trim() || instrument.displayName,
-      targetPrice: Number(targetPrice),
+      targetPrice,
       condition,
-      intervalMinutes: Number(frequencyMinutes),
+      intervalMinutes: frequencyMinutes,
       isActive: isEnabled,
     };
 
@@ -220,9 +258,9 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
     setQuery('');
     setInstrument(null);
     setOptions([]);
-    setTargetPrice('');
+    setTargetPrice(null);
     setCondition('gte');
-    setFrequencyMinutes('5');
+    setFrequencyMinutes(5);
     setNotificationChannels(['inApp']);
     setIsEnabled(true);
     setCurrentPrice(null);
@@ -230,138 +268,154 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
   };
 
   return (
-    <section className="card">
-      <h2>{editing ? 'Edit alert' : 'New alert'}</h2>
-      <form onSubmit={onSubmit}>
-        <label>
-          Alert name
-          <input
-            value={alertName}
-            onChange={(e) => setAlertName(e.target.value)}
-            placeholder="BTC breakout alert"
-            required
-          />
-        </label>
-
-        <label>
-          Asset selector (symbol/search)
-          <div className="row">
-            <input
-              value={query}
-              onChange={(e) => {
-                setQuery(e.target.value);
-                if (searchFeedback) {
-                  setSearchFeedback(null);
-                  setSearchFeedbackType(null);
-                }
-              }}
-              placeholder="AAPL, BTC, TSLA"
-              required
+    <PageSection
+      title={editing ? 'Edit alert' : 'New alert'}
+      subtitle="Track an asset, define a trigger, and keep notifications under control."
+    >
+      <Card className="card-surface">
+        <Form layout="vertical" onSubmitCapture={onSubmit}>
+          <Form.Item label="Alert name" required>
+            <Input
+              value={alertName}
+              onChange={(e) => setAlertName(e.target.value)}
+              placeholder="BTC breakout alert"
+              maxLength={80}
             />
-            <button type="button" onClick={search} disabled={isSearching}>
-              {isSearching ? 'Searching...' : 'Search'}
-            </button>
-          </div>
-        </label>
+          </Form.Item>
 
-        {options.length > 0 ? (
-          <ul className="options">
-            {options.map((item) => (
-              <li key={item.instrumentId}>
-                <button type="button" onClick={() => onSelect(item)}>
-                  {item.symbol} - {item.displayName}
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-        {searchFeedback ? (
-          <p className={searchFeedbackType === 'error' ? 'error' : 'field-help'} role="status">
-            {searchFeedback}
-          </p>
-        ) : null}
-
-        {instrument ? <p>Selected: {instrument.symbol}</p> : null}
-        {isLoadingPrice ? <p>Loading current price...</p> : null}
-        {currentPrice !== null ? <p>Current price: {currentPrice}</p> : null}
-
-        <label>
-          Condition
-          <select value={condition} onChange={(e) => setCondition(e.target.value as 'gte' | 'lte')}>
-            <option value="gte">Above</option>
-            <option value="lte">Below</option>
-          </select>
-        </label>
-
-        <label>
-          Target price
-          <input
-            type="number"
-            step="0.0001"
-            value={targetPrice}
-            onChange={(e) => setTargetPrice(e.target.value)}
-            required
-          />
-        </label>
-
-        <label>
-          Check interval (minutes)
-          <input
-            type="number"
-            min={1}
-            max={1440}
-            value={frequencyMinutes}
-            onChange={(e) => setFrequencyMinutes(e.target.value)}
-            required
-          />
-        </label>
-
-        <fieldset className="channels-fieldset">
-          <legend>Notification channel(s)</legend>
-          <div className="row wrap">
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={notificationChannels.includes('inApp')}
-                onChange={() => onToggleChannel('inApp')}
+          <Form.Item label="Asset selector (symbol/search)" required>
+            <FormRow>
+              <Input
+                value={query}
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  if (searchFeedback) {
+                    setSearchFeedback(null);
+                    setSearchFeedbackType(null);
+                  }
+                }}
+                placeholder="AAPL, BTC, TSLA"
               />
-              In-app
-            </label>
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={notificationChannels.includes('email')}
-                onChange={() => onToggleChannel('email')}
-              />
-              Email
-            </label>
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={notificationChannels.includes('push')}
-                onChange={() => onToggleChannel('push')}
-              />
-              Push
-            </label>
-          </div>
-          <p className="field-help">Delivery setup is wired in later tasks; this UI now captures selection.</p>
-        </fieldset>
+              <Button type="default" onClick={search} loading={isSearching}>
+                Search
+              </Button>
+            </FormRow>
+            <FieldHint>Search and then pick a single instrument from the result list.</FieldHint>
+          </Form.Item>
 
-        <label className="checkbox-label">
-          <input type="checkbox" checked={isEnabled} onChange={(e) => setIsEnabled(e.target.checked)} />
-          Enabled status
-        </label>
-
-        <div className="row">
-          <button type="submit">Save alert</button>
-          {editing ? (
-            <button type="button" onClick={onCancelEdit}>
-              Cancel edit
-            </button>
+          {searchOptions.length > 0 ? (
+            <Form.Item label="Search results">
+              <Select
+                placeholder="Select an asset"
+                options={searchOptions}
+                value={instrument ? String(instrument.instrumentId) : undefined}
+                onChange={(value) => {
+                  void onSelect(value);
+                }}
+              />
+            </Form.Item>
           ) : null}
-        </div>
-        {error ? <p className="error">{error}</p> : null}
-      </form>
-    </section>
+
+          {searchFeedback ? (
+            <Alert
+              type={searchFeedbackType === 'error' ? 'error' : 'info'}
+              showIcon
+              message={searchFeedback}
+              className="form-alert"
+            />
+          ) : null}
+
+          {instrument ? (
+            <Typography.Text>
+              Selected: <strong>{instrument.symbol}</strong>
+            </Typography.Text>
+          ) : null}
+
+          {isLoadingPrice ? (
+            <Space>
+              <Spin size="small" />
+              <Typography.Text>Loading current price...</Typography.Text>
+            </Space>
+          ) : null}
+
+          {currentPrice !== null ? <Typography.Text>Current price: {currentPrice}</Typography.Text> : null}
+
+          <Form.Item label="Condition" required>
+            <Select
+              value={condition}
+              options={[
+                { value: 'gte', label: 'Above' },
+                { value: 'lte', label: 'Below' },
+              ]}
+              onChange={(value) => setCondition(value)}
+            />
+          </Form.Item>
+
+          <Form.Item label="Target price" required>
+            <InputNumber
+              value={targetPrice}
+              onChange={(value) => setTargetPrice(typeof value === 'number' ? value : null)}
+              min={0.0001}
+              step={0.0001}
+              controls
+              style={{ width: '100%' }}
+            />
+          </Form.Item>
+
+          <Form.Item label="Check interval (minutes)" required>
+            <InputNumber
+              value={frequencyMinutes}
+              onChange={(value) => setFrequencyMinutes(typeof value === 'number' ? value : 5)}
+              min={1}
+              max={1440}
+              style={{ width: '100%' }}
+            />
+          </Form.Item>
+
+          <Form.Item label="Notification channel(s)">
+            <Space size={16} wrap>
+              <Checkbox
+                checked={notificationChannels.includes('inApp')}
+                onChange={(event) => onToggleChannel('inApp', event.target.checked)}
+              >
+                In-app
+              </Checkbox>
+              <Checkbox
+                checked={notificationChannels.includes('email')}
+                onChange={(event) => onToggleChannel('email', event.target.checked)}
+              >
+                Email
+              </Checkbox>
+              <Checkbox
+                checked={notificationChannels.includes('push')}
+                onChange={(event) => onToggleChannel('push', event.target.checked)}
+              >
+                Push
+              </Checkbox>
+            </Space>
+            <div>
+              <FieldHint>Delivery setup is wired in later tasks; this UI captures selection.</FieldHint>
+            </div>
+          </Form.Item>
+
+          <Form.Item label="Enabled status" valuePropName="checked">
+            <Switch checked={isEnabled} onChange={setIsEnabled} checkedChildren="Enabled" unCheckedChildren="Paused" />
+          </Form.Item>
+
+          <ActionBar>
+            <Button htmlType="submit" type="primary">
+              Save alert
+            </Button>
+            {editing ? (
+              <Button type="default" onClick={onCancelEdit}>
+                Cancel edit
+              </Button>
+            ) : null}
+          </ActionBar>
+
+          {error ? <Alert type="error" showIcon message={error} /> : null}
+        </Form>
+      </Card>
+    </PageSection>
   );
 }

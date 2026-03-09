@@ -57,7 +57,7 @@
 
 ## Frontend Design, UX, Quality, and Accessibility
 
-- [ ] `SOTRY-10` Ant Design foundation and UI architecture
+- [x] `SOTRY-10` Ant Design foundation and UI architecture
   - Product goal: establish a consistent design system for faster feature delivery and lower UI bugs.
   - Scope:
   - Install/configure Ant Design in React app.
