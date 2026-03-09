@@ -2,6 +2,11 @@ const { randomUUID } = require("crypto");
 const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
+const admin = require("firebase-admin");
+
+if (admin.apps.length === 0) {
+  admin.initializeApp();
+}
 
 const ETORO_API_KEY = defineSecret("ETORO_API_KEY");
 const ETORO_USER_KEY = defineSecret("ETORO_USER_KEY");
@@ -10,6 +15,9 @@ const ETORO_RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
 const ETORO_MAX_RETRIES = 2;
 const ETORO_SEARCH_PAGE_SIZE = 50;
 const ETORO_SEARCH_MAX_PAGES = 2;
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const RATE_LIMIT_MAX_REQUESTS = 30;
+const rateLimitBuckets = new Map();
 
 function asNumber(value) {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -389,6 +397,125 @@ function getEtoroSecretKeys() {
   };
 }
 
+function getClientIp(request) {
+  const forwardedFor = request?.headers?.["x-forwarded-for"];
+  if (typeof forwardedFor === "string" && forwardedFor.trim() !== "") {
+    const first = forwardedFor.split(",")[0].trim();
+    if (first) {
+      return first;
+    }
+  }
+
+  return (
+    request?.ip ||
+    request?.socket?.remoteAddress ||
+    request?.rawRequest?.ip ||
+    "unknown"
+  );
+}
+
+function enforceRateLimit(scope, identity) {
+  const now = Date.now();
+  const key = `${scope}:${identity}`;
+  const recent = rateLimitBuckets.get(key) || [];
+  const activeWindow = recent.filter((entry) => now - entry < RATE_LIMIT_WINDOW_MS);
+
+  if (activeWindow.length >= RATE_LIMIT_MAX_REQUESTS) {
+    throw new HttpsError("resource-exhausted", "Too many requests. Try again later.");
+  }
+
+  activeWindow.push(now);
+  rateLimitBuckets.set(key, activeWindow);
+}
+
+function requireCallableAuthAndAppCheck(request, functionName) {
+  const callerUid = request?.auth?.uid || "anonymous";
+  if (!request?.auth?.uid) {
+    logger.warn("Callable request rejected", {
+      functionName,
+      callerUid,
+      rejectionReason: "missing-auth",
+    });
+    throw new HttpsError("unauthenticated", "Authentication is required.");
+  }
+
+  if (!request?.app?.appId) {
+    logger.warn("Callable request rejected", {
+      functionName,
+      callerUid,
+      rejectionReason: "missing-app-check",
+    });
+    throw new HttpsError("unauthenticated", "App Check is required.");
+  }
+
+  enforceRateLimit(functionName, `uid:${request.auth.uid}`);
+  return request.auth.uid;
+}
+
+function parseBearerToken(authHeader) {
+  if (typeof authHeader !== "string") {
+    return null;
+  }
+
+  const [scheme, token] = authHeader.split(" ");
+  if (scheme !== "Bearer" || !token) {
+    return null;
+  }
+
+  return token.trim();
+}
+
+async function verifyHttpAuthAndAppCheck(request, functionName) {
+  const idToken = parseBearerToken(request?.headers?.authorization);
+  if (!idToken) {
+    logger.warn("HTTP request rejected", {
+      functionName,
+      callerUid: "anonymous",
+      rejectionReason: "missing-auth-token",
+    });
+    throw new HttpsError("unauthenticated", "Authentication is required.");
+  }
+
+  const appCheckToken = request?.headers?.["x-firebase-appcheck"];
+  if (typeof appCheckToken !== "string" || appCheckToken.trim() === "") {
+    logger.warn("HTTP request rejected", {
+      functionName,
+      callerUid: "anonymous",
+      rejectionReason: "missing-app-check-token",
+    });
+    throw new HttpsError("unauthenticated", "App Check is required.");
+  }
+
+  let decodedIdToken;
+  try {
+    decodedIdToken = await admin.auth().verifyIdToken(idToken);
+  } catch (_error) {
+    logger.warn("HTTP request rejected", {
+      functionName,
+      callerUid: "anonymous",
+      rejectionReason: "invalid-auth-token",
+    });
+    throw new HttpsError("unauthenticated", "Authentication is required.");
+  }
+
+  try {
+    await admin.appCheck().verifyToken(appCheckToken);
+  } catch (_error) {
+    logger.warn("HTTP request rejected", {
+      functionName,
+      callerUid: decodedIdToken.uid || "anonymous",
+      rejectionReason: "invalid-app-check-token",
+    });
+    throw new HttpsError("unauthenticated", "App Check is required.");
+  }
+
+  const callerUid = decodedIdToken.uid || "anonymous";
+  const callerIp = getClientIp(request);
+  enforceRateLimit(functionName, `uid:${callerUid}`);
+  enforceRateLimit(functionName, `ip:${callerIp}`);
+  return { callerUid, callerIp };
+}
+
 async function searchEtoroAssets(searchText) {
   const trimmedSearchText = asString(searchText);
   if (!trimmedSearchText) {
@@ -494,8 +621,10 @@ exports.searchEtoroInstruments = onCall(
   {
     secrets: [ETORO_API_KEY, ETORO_USER_KEY],
     cors: true,
+    enforceAppCheck: true,
   },
   async (request) => {
+    requireCallableAuthAndAppCheck(request, "searchEtoroInstruments");
     return searchEtoroAssets(request.data?.searchText);
   },
 );
@@ -504,8 +633,10 @@ exports.getEtoroInstrumentRate = onCall(
   {
     secrets: [ETORO_API_KEY, ETORO_USER_KEY],
     cors: true,
+    enforceAppCheck: true,
   },
   async (request) => {
+    requireCallableAuthAndAppCheck(request, "getEtoroInstrumentRate");
     return fetchEtoroInstrumentRate(request.data?.instrumentId);
   },
 );
@@ -522,11 +653,14 @@ exports.marketDataSearchHttp = onRequest(
     }
 
     try {
+      await verifyHttpAuthAndAppCheck(request, "marketDataSearchHttp");
       const result = await searchEtoroAssets(request.query.searchText);
       response.status(200).json(result);
     } catch (error) {
       if (error instanceof HttpsError) {
-        response.status(400).json({
+        response
+          .status(error.code === "unauthenticated" ? 401 : 400)
+          .json({
           error: error.message,
           code: error.code,
         });
@@ -551,11 +685,14 @@ exports.marketDataInstrumentRatesHttp = onRequest(
     }
 
     try {
+      await verifyHttpAuthAndAppCheck(request, "marketDataInstrumentRatesHttp");
       const result = await fetchEtoroInstrumentRate(request.query.instrumentId);
       response.status(200).json(result);
     } catch (error) {
       if (error instanceof HttpsError) {
-        response.status(400).json({
+        response
+          .status(error.code === "unauthenticated" ? 401 : 400)
+          .json({
           error: error.message,
           code: error.code,
         });
@@ -577,4 +714,10 @@ exports.__test = {
   asString,
   rankSearchResults,
   isSearchMatch,
+  parseBearerToken,
+  requireCallableAuthAndAppCheck,
+  getClientIp,
+  enforceRateLimit,
+  verifyHttpAuthAndAppCheck,
+  __rateLimitBuckets: rateLimitBuckets,
 };

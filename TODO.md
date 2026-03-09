@@ -168,23 +168,110 @@
   - Accessibility tests run in CI on every PR.
   - PR cannot merge when critical violations are detected.
 
-### Recommended implementation order (to avoid rework)
+## Architecture + Engineering Audit (2026-03-09)
 
-1. `SOTRY-10` (design system foundation)
-2. `SOTRY-11` (form information architecture)
-3. `SOTRY-12` (condition toggle control)
-4. `SOTRY-13` (visual/interaction consistency pass)
-5. `SOTRY-14` (test expansion + coverage gates)
-6. `SOTRY-15` (fix defects found by tests)
-7. `SOTRY-16` (manual + automated accessibility remediation)
-8. `SOTRY-17` (pipeline-level accessibility guardrails)
+- [x] `STORY-20260309-001` Lock down market-data function access
+  - Type: `security`
+  - Area: `backend`
+  - Problem: `searchEtoroInstruments`, `getEtoroInstrumentRate`, and HTTP wrappers do not enforce authenticated callers, so any client can spend eToro quota and probe backend behavior.
+  - Impact: Unauthorized usage, higher billing risk, and larger attack surface on public endpoints.
+  - Proposed change: Require Firebase Auth/App Check for callable handlers, restrict or remove unauthenticated HTTP wrappers, and add per-user/per-IP throttling guardrails.
+  - Acceptance criteria:
+    - Unauthenticated and invalid App Check requests are rejected with `unauthenticated`.
+    - Public HTTP wrappers are either removed or protected by verified auth/app token checks.
+    - Logs include caller uid (or anonymous marker) and rejection reason without leaking secrets.
+  - Dependencies: `none`
+  - Priority: `P0`
+  - Effort: `M`
+
+- [ ] `STORY-20260309-002` Sanitize backend error contracts
+  - Type: `security`
+  - Area: `backend`
+  - Problem: Backend error messages currently propagate upstream provider details directly to clients (`eToro API request failed: ...`), increasing information leakage risk.
+  - Impact: Attackers can infer provider behavior and internal integration state from verbose error payloads.
+  - Proposed change: Introduce a stable error mapping layer with client-safe messages, internal correlation IDs, and full detail only in structured server logs.
+  - Acceptance criteria:
+    - Client responses expose only approved message catalog + machine-readable error code.
+    - Upstream/provider payload fragments are never returned to callers.
+    - Correlation id is returned to client and present in Cloud Logging entries.
+  - Dependencies: `STORY-20260309-001`
+  - Priority: `P1`
+  - Effort: `S`
+
+- [ ] `STORY-20260309-003` Extract shared alert form state + market data client
+  - Type: `refactor`
+  - Area: `frontend`
+  - Problem: `AlertForm` mixes UI, async calls, and duplicated reset/edit state logic, making changes risky and hard to test.
+  - Impact: Slower feature delivery, regression-prone edits, and weak reuse for future alert screens.
+  - Proposed change: Move form state machine + submit/search/rate side effects into reusable hooks/services (`useAlertEditor`, `marketDataClient`) with typed interfaces.
+  - Acceptance criteria:
+    - `AlertForm` becomes mostly presentational and consumes extracted hook/service.
+    - Reset/edit initialization logic exists in one place only.
+    - Unit tests cover hook/service success, validation failure, and async error paths.
+  - Dependencies: `SOTRY-10`
+  - Priority: `P2`
+  - Effort: `M`
+
+- [ ] `STORY-20260309-004` Enforce backend code quality gates in CI
+  - Type: `quality`
+  - Area: `testing`
+  - Problem: `functions:lint` is a no-op (`echo 'No lint configured'`), so CI currently reports green without backend static checks.
+  - Impact: Preventable defects and insecure patterns can reach production undetected.
+  - Proposed change: Add ESLint + formatting checks for `app/functions`, enforce coverage threshold for function tests, and fail PR pipelines on violations.
+  - Acceptance criteria:
+    - `npm run functions:lint` performs real linting and fails on rule violations.
+    - Functions tests publish coverage and enforce minimum threshold in CI.
+    - Both GitHub workflows fail when backend quality gates fail.
+  - Dependencies: `none`
+  - Priority: `P1`
+  - Effort: `M`
+
+- [ ] `STORY-20260309-005` Reconcile docs with deployed architecture
+  - Type: `tech-debt`
+  - Area: `infra`
+  - Problem: `app/README.md` documents functions (`checkAlerts`, CRUD functions) that are not implemented in `app/functions/index.js`.
+  - Impact: Onboarding friction, operational confusion, and incorrect runbook assumptions during incidents.
+  - Proposed change: Update README to match actual runtime behavior and add a lightweight architecture decision log for implemented vs planned capabilities.
+  - Acceptance criteria:
+    - README function inventory matches exported functions in code.
+    - Planned-but-missing capabilities are explicitly marked as backlog items.
+    - Local setup/deploy/testing instructions are verified end-to-end.
+  - Dependencies: `SOTRY-5`, `SOTRY-6`
+  - Priority: `P2`
+  - Effort: `S`
+
+### Recommended execution order
+1. `STORY-20260309-001`
+2. `SOTRY-7`
+3. `STORY-20260309-002`
+4. `STORY-20260309-004`
+5. `SOTRY-5`
+6. `SOTRY-6`
+7. `SOTRY-9`
+8. `SOTRY-10`
+9. `SOTRY-11`
+10. `SOTRY-12`
+11. `SOTRY-13`
+12. `STORY-20260309-003`
+13. `SOTRY-14`
+14. `SOTRY-15`
+15. `SOTRY-16`
+16. `SOTRY-17`
+17. `STORY-20260309-005`
 
 ### Story dependencies
 
+- `SOTRY-7` should start with `STORY-20260309-001` hardening and then focus on runtime retry/backoff/logging.
+- `STORY-20260309-002` depends on `STORY-20260309-001` to avoid reworking auth/error paths twice.
+- `SOTRY-5` depends on `SOTRY-7` baseline resilience controls.
+- `SOTRY-6` depends on `SOTRY-5` event generation.
+- `SOTRY-9` depends on `SOTRY-5` and `SOTRY-6`.
 - `SOTRY-11` depends on `SOTRY-10` token/component foundation.
 - `SOTRY-12` depends on `SOTRY-10` and should be included in `SOTRY-11` form layout.
 - `SOTRY-13` depends on `SOTRY-10` and `SOTRY-11`.
-- `SOTRY-14` can start in parallel, but final assertions depend on `SOTRY-10` to `SOTRY-13`.
+- `STORY-20260309-003` depends on `SOTRY-10` for stable UI primitives.
+- `SOTRY-14` depends on `SOTRY-10` to `SOTRY-13` plus `STORY-20260309-003` for stable component seams.
 - `SOTRY-15` depends on `SOTRY-14` results.
 - `SOTRY-16` depends on UI implementation from `SOTRY-10` to `SOTRY-13`.
 - `SOTRY-17` depends on `SOTRY-14` and `SOTRY-16`.
+- `STORY-20260309-005` should be completed after `SOTRY-5` and `SOTRY-6` to document real delivered behavior.
