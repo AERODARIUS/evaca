@@ -87,7 +87,7 @@
   - Search and submit flows always show deterministic state feedback.
   - Form completion requires no ambiguous inputs.
 
-- [ ] `SOTRY-12` Condition control redesign (toggle pattern)
+- [x] `SOTRY-12` Condition control redesign (toggle pattern)
   - User story: as a user, I can switch condition quickly without opening a dropdown.
   - Scope:
   - Replace `Condition` select with a single toggle button control.

@@ -105,6 +105,30 @@ body {
   margin-bottom: 14px;
 }
 
+.condition-toggle {
+  min-width: 130px;
+}
+
+.condition-toggle-gte {
+  border-color: #1f6f78 !important;
+  color: #1f6f78 !important;
+}
+
+.condition-toggle-lte {
+  border-color: #8d3f3f !important;
+  color: #8d3f3f !important;
+}
+
+.condition-toggle:hover,
+.condition-toggle:active {
+  transform: translateY(-1px);
+}
+
+.condition-toggle:focus-visible {
+  outline: 3px solid #94c2ff;
+  outline-offset: 2px;
+}
+
 .auth-actions {
   display: grid;
   gap: 0.6rem;

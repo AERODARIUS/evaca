@@ -13,6 +13,7 @@ import {
   Switch,
   Typography,
 } from 'antd';
+import { ArrowDownOutlined, ArrowUpOutlined } from '@ant-design/icons';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../lib/firebase';
 import { AlertRow, InstrumentOption } from '../types';
@@ -320,6 +321,10 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
     await onSaved();
   };
 
+  const toggleCondition = () => {
+    setCondition((current) => (current === 'gte' ? 'lte' : 'gte'));
+  };
+
   const onQueryKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter') {
       event.preventDefault();
@@ -411,14 +416,20 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
           <Typography.Title level={4}>Trigger</Typography.Title>
 
           <Form.Item label="Condition" required>
-            <Select
-              value={condition}
-              options={[
-                { value: 'gte', label: 'Above' },
-                { value: 'lte', label: 'Below' },
-              ]}
-              onChange={(value) => setCondition(value)}
-            />
+            <Button
+              type="default"
+              className={`condition-toggle condition-toggle-${condition}`}
+              onClick={toggleCondition}
+              icon={condition === 'gte' ? <ArrowUpOutlined /> : <ArrowDownOutlined />}
+              disabled={isSubmitting}
+            >
+              {condition === 'gte' ? 'Above' : 'Below'}
+            </Button>
+            <div>
+              <FieldHint>
+                Press Enter, Space, or click to switch between Above and Below.
+              </FieldHint>
+            </div>
           </Form.Item>
 
           <Form.Item
