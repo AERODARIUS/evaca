@@ -109,3 +109,28 @@ test("enforceRateLimit blocks when window max is exceeded", () => {
     (error) => error?.code === "resource-exhausted",
   );
 });
+
+test("buildSearchCandidates prefers ticker lookup for ticker-like search", () => {
+  const candidates = __test.buildSearchCandidates("btc");
+
+  assert.deepEqual(candidates, [
+    {
+      kind: "internalSymbolFull",
+      queryValue: "BTC",
+      withPagination: false,
+      fields: "instrumentId,internalSymbolFull,displayname",
+    },
+  ]);
+});
+
+test("buildSearchCandidates uses text search for non-ticker input", () => {
+  const candidates = __test.buildSearchCandidates("bitcoin us dollar");
+
+  assert.deepEqual(candidates, [
+    {
+      kind: "searchText",
+      queryValue: "bitcoin us dollar",
+      withPagination: true,
+    },
+  ]);
+});

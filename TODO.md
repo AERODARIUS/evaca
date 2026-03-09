@@ -38,7 +38,7 @@
   - Mark status (`pending`, `sent`, `failed`)
   - Link notification to alert + user
 
-- [ ] `SOTRY-7` Security and ops:
+- [x] `SOTRY-7` Security and ops:
   - Keep all eToro keys only in Functions secrets manager
   - Enforce Firestore security rules per user
   - Add retries + logging for eToro/API failures

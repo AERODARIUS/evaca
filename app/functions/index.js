@@ -13,10 +13,14 @@ const ETORO_USER_KEY = defineSecret("ETORO_USER_KEY");
 const ETORO_BASE_URL = "https://public-api.etoro.com/api/v1";
 const ETORO_RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
 const ETORO_MAX_RETRIES = 2;
+const ETORO_REQUEST_TIMEOUT_MS = 8000;
+const ETORO_RETRY_BASE_DELAY_MS = 250;
+const ETORO_RETRY_JITTER_MS = 120;
 const ETORO_SEARCH_PAGE_SIZE = 50;
 const ETORO_SEARCH_MAX_PAGES = 2;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX_REQUESTS = 30;
+const RATE_LIMIT_MAX_BUCKETS = 5000;
 const rateLimitBuckets = new Map();
 
 function asNumber(value) {
@@ -181,26 +185,42 @@ function extractPrice(item) {
 async function callEtoro(path, apiKey, userKey) {
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+  const getRetryDelay = (attempt) =>
+    ETORO_RETRY_BASE_DELAY_MS * (attempt + 1) +
+    Math.floor(Math.random() * ETORO_RETRY_JITTER_MS);
+
   for (let attempt = 0; attempt <= ETORO_MAX_RETRIES; attempt += 1) {
+    const startMs = Date.now();
     let response;
+    let payload = null;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), ETORO_REQUEST_TIMEOUT_MS);
+
     try {
       response = await fetch(`${ETORO_BASE_URL}${path}`, {
         method: "GET",
+        signal: controller.signal,
         headers: {
           "x-request-id": randomUUID(),
           "x-api-key": apiKey,
           "x-user-key": userKey,
         },
       });
+      try {
+        payload = await response.json();
+      } catch (_error) {
+        payload = null;
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Network error";
       logger.warn("eToro network error", {
         path,
         attempt,
         errorMessage: message,
+        durationMs: Date.now() - startMs,
       });
       if (attempt < ETORO_MAX_RETRIES) {
-        await delay(200 * (attempt + 1));
+        await delay(getRetryDelay(attempt));
         continue;
       }
 
@@ -208,14 +228,17 @@ async function callEtoro(path, apiKey, userKey) {
         "unavailable",
         `Unable to reach eToro API. ${message}`,
       );
+    } finally {
+      clearTimeout(timeout);
     }
 
-    let payload;
-    try {
-      payload = await response.json();
-    } catch (_error) {
-      payload = null;
-    }
+    logger.info("eToro response received", {
+      path,
+      attempt,
+      status: response.status,
+      ok: response.ok,
+      durationMs: Date.now() - startMs,
+    });
 
     if (!response.ok) {
       const serverMessage =
@@ -235,7 +258,7 @@ async function callEtoro(path, apiKey, userKey) {
         ETORO_RETRYABLE_STATUSES.has(response.status) &&
         attempt < ETORO_MAX_RETRIES
       ) {
-        await delay(200 * (attempt + 1));
+        await delay(getRetryDelay(attempt));
         continue;
       }
 
@@ -426,6 +449,19 @@ function enforceRateLimit(scope, identity) {
 
   activeWindow.push(now);
   rateLimitBuckets.set(key, activeWindow);
+
+  // Keep bucket growth bounded under noisy traffic patterns.
+  if (rateLimitBuckets.size > RATE_LIMIT_MAX_BUCKETS) {
+    for (const [bucketKey, timestamps] of rateLimitBuckets.entries()) {
+      const hasActiveEntry = timestamps.some((entry) => now - entry < RATE_LIMIT_WINDOW_MS);
+      if (!hasActiveEntry) {
+        rateLimitBuckets.delete(bucketKey);
+      }
+      if (rateLimitBuckets.size <= RATE_LIMIT_MAX_BUCKETS) {
+        break;
+      }
+    }
+  }
 }
 
 function requireCallableAuthAndAppCheck(request, functionName) {
@@ -523,40 +559,56 @@ async function searchEtoroAssets(searchText) {
   }
 
   const { apiKey, userKey } = getEtoroSecretKeys();
-  const upper = trimmedSearchText.toUpperCase();
-  const isTickerLike = /^[A-Za-z0-9._-]{1,16}$/.test(trimmedSearchText);
+  const candidates = buildSearchCandidates(trimmedSearchText);
+  const rawItems = [];
 
-  const query = new URLSearchParams();
-  const searchFields = "instrumentId,internalSymbolFull,displayname";
-  if (isTickerLike) {
-    query.set("internalSymbolFull", upper);
-    query.set("pageSize", "20");
-    query.set("pageNumber", "1");
-  } else {
-    query.set("searchText", trimmedSearchText);
-    query.set("pageSize", "20");
-    query.set("pageNumber", "1");
+  for (const candidate of candidates) {
+    for (
+      let pageNumber = 1;
+      pageNumber <= (candidate.withPagination ? ETORO_SEARCH_MAX_PAGES : 1);
+      pageNumber += 1
+    ) {
+      const query = new URLSearchParams();
+      query.set(candidate.kind, candidate.queryValue);
+      query.set("pageSize", String(ETORO_SEARCH_PAGE_SIZE));
+      query.set("pageNumber", String(pageNumber));
+      if (candidate.fields) {
+        query.set("fields", candidate.fields);
+      }
+
+      logger.info("eToro search request", {
+        searchText: trimmedSearchText,
+        mode: candidate.kind,
+        pageNumber,
+      });
+
+      const payload = await callEtoro(
+        `/market-data/search?${query.toString()}`,
+        apiKey,
+        userKey,
+      );
+      const pageItems = extractItems(payload);
+      rawItems.push(...pageItems);
+
+      if (pageItems.length < ETORO_SEARCH_PAGE_SIZE) {
+        break;
+      }
+    }
   }
-  query.set("fields", searchFields);
-  const encodedFields = encodeURIComponent(searchFields);
-  const queryString = query
-    .toString()
-    .replace(`fields=${encodedFields}`, `fields=${searchFields}`);
 
-  logger.info("eToro search request", {
-    searchText: trimmedSearchText,
-    mode: isTickerLike ? "internalSymbolFull" : "searchText",
-    query: queryString,
-  });
-
-  const payload = await callEtoro(
-    `/market-data/search?${queryString}`,
-    apiKey,
-    userKey,
+  const dedupedByInstrumentId = Array.from(
+    new Map(
+      rawItems.map((item) => {
+        const id =
+          asNumber(item?.instrumentId) ??
+          asNumber(item?.InstrumentID) ??
+          asNumber(item?.instrumentID) ??
+          asNumber(item?.id);
+        return [id ?? randomUUID(), item];
+      }),
+    ).values(),
   );
-
-  const rawItems = extractItems(payload);
-  const normalizedItems = rawItems
+  const normalizedItems = dedupedByInstrumentId
     .map(normalizeInstrument)
     .filter((item) => item !== null);
 
@@ -566,8 +618,8 @@ async function searchEtoroAssets(searchText) {
   );
 
   logger.info("eToro search response", {
-    mode: isTickerLike ? "internalSymbolFull" : "searchText",
     totalRawItems: rawItems.length,
+    totalDedupedItems: dedupedByInstrumentId.length,
     totalNormalizedItems: normalizedItems.length,
     totalMatchedItems: items.length,
   });
@@ -718,6 +770,7 @@ exports.__test = {
   requireCallableAuthAndAppCheck,
   getClientIp,
   enforceRateLimit,
+  buildSearchCandidates,
   verifyHttpAuthAndAppCheck,
   __rateLimitBuckets: rateLimitBuckets,
 };
