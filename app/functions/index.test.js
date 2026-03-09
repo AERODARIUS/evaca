@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { HttpsError } = require("firebase-functions/v2/https");
 
 const { __test } = require("./index");
 
@@ -133,4 +134,43 @@ test("buildSearchCandidates uses text search for non-ticker input", () => {
       withPagination: true,
     },
   ]);
+});
+
+test("getHttpStatusFromHttpsCode maps known firebase codes", () => {
+  assert.equal(__test.getHttpStatusFromHttpsCode("invalid-argument"), 400);
+  assert.equal(__test.getHttpStatusFromHttpsCode("unauthenticated"), 401);
+  assert.equal(__test.getHttpStatusFromHttpsCode("resource-exhausted"), 429);
+  assert.equal(__test.getHttpStatusFromHttpsCode("unknown-code"), 500);
+});
+
+test("toClientError returns safe payload for HttpsError", () => {
+  const clientError = __test.toClientError(
+    new HttpsError("permission-denied", "Request could not be authorized.", {
+      errorCode: "ETORO_FORBIDDEN",
+    }),
+    "corr-123",
+  );
+
+  assert.deepEqual(clientError, {
+    httpStatus: 403,
+    code: "permission-denied",
+    errorCode: "ETORO_FORBIDDEN",
+    message: "Request could not be authorized.",
+    correlationId: "corr-123",
+  });
+});
+
+test("toClientError masks unknown errors with internal response", () => {
+  const clientError = __test.toClientError(
+    new Error("provider raw payload leaked details"),
+    "corr-456",
+  );
+
+  assert.deepEqual(clientError, {
+    httpStatus: 500,
+    code: "internal",
+    errorCode: "INTERNAL_ERROR",
+    message: "Internal error.",
+    correlationId: "corr-456",
+  });
 });

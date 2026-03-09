@@ -184,7 +184,7 @@
   - Priority: `P0`
   - Effort: `M`
 
-- [ ] `STORY-20260309-002` Sanitize backend error contracts
+- [x] `STORY-20260309-002` Sanitize backend error contracts
   - Type: `security`
   - Area: `backend`
   - Problem: Backend error messages currently propagate upstream provider details directly to clients (`eToro API request failed: ...`), increasing information leakage risk.

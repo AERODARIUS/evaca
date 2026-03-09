@@ -22,6 +22,16 @@ const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX_REQUESTS = 30;
 const RATE_LIMIT_MAX_BUCKETS = 5000;
 const rateLimitBuckets = new Map();
+const SAFE_ERROR_MESSAGES = Object.freeze({
+  ETORO_BAD_REQUEST: "Request validation failed.",
+  ETORO_FORBIDDEN: "Request could not be authorized.",
+  ETORO_NOT_FOUND: "Requested resource was not found.",
+  ETORO_UNAVAILABLE: "Provider is temporarily unavailable.",
+  ETORO_INTERNAL: "Provider request failed.",
+  AUTH_REQUIRED: "Authentication is required.",
+  APP_CHECK_REQUIRED: "App Check is required.",
+  INTERNAL: "Internal error.",
+});
 
 function asNumber(value) {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -226,7 +236,8 @@ async function callEtoro(path, apiKey, userKey) {
 
       throw new HttpsError(
         "unavailable",
-        `Unable to reach eToro API. ${message}`,
+        SAFE_ERROR_MESSAGES.ETORO_UNAVAILABLE,
+        { errorCode: "ETORO_UNAVAILABLE" },
       );
     } finally {
       clearTimeout(timeout);
@@ -265,34 +276,39 @@ async function callEtoro(path, apiKey, userKey) {
       if (response.status === 400) {
         throw new HttpsError(
           "invalid-argument",
-          `eToro API request failed: ${serverMessage}`,
+          SAFE_ERROR_MESSAGES.ETORO_BAD_REQUEST,
+          { errorCode: "ETORO_BAD_REQUEST" },
         );
       }
 
       if (response.status === 401 || response.status === 403) {
         throw new HttpsError(
           "permission-denied",
-          `eToro API request failed: ${serverMessage}`,
+          SAFE_ERROR_MESSAGES.ETORO_FORBIDDEN,
+          { errorCode: "ETORO_FORBIDDEN" },
         );
       }
 
       if (response.status === 404) {
         throw new HttpsError(
           "not-found",
-          `eToro API request failed: ${serverMessage}`,
+          SAFE_ERROR_MESSAGES.ETORO_NOT_FOUND,
+          { errorCode: "ETORO_NOT_FOUND" },
         );
       }
 
       if (response.status === 429 || response.status >= 500) {
         throw new HttpsError(
           "unavailable",
-          `eToro API request failed: ${serverMessage}`,
+          SAFE_ERROR_MESSAGES.ETORO_UNAVAILABLE,
+          { errorCode: "ETORO_UNAVAILABLE" },
         );
       }
 
       throw new HttpsError(
         "internal",
-        `eToro API request failed: ${serverMessage}`,
+        SAFE_ERROR_MESSAGES.ETORO_INTERNAL,
+        { errorCode: "ETORO_INTERNAL" },
       );
     }
 
@@ -301,8 +317,48 @@ async function callEtoro(path, apiKey, userKey) {
 
   throw new HttpsError(
     "unavailable",
-    "Unable to reach eToro API after retries.",
+    SAFE_ERROR_MESSAGES.ETORO_UNAVAILABLE,
+    { errorCode: "ETORO_UNAVAILABLE" },
   );
+}
+
+function getHttpStatusFromHttpsCode(code) {
+  const map = {
+    "invalid-argument": 400,
+    unauthenticated: 401,
+    "permission-denied": 403,
+    "not-found": 404,
+    "resource-exhausted": 429,
+    unavailable: 503,
+    internal: 500,
+  };
+  return map[code] || 500;
+}
+
+function toClientError(error, correlationId) {
+  if (error instanceof HttpsError) {
+    const detailCode =
+      error?.details &&
+      typeof error.details === "object" &&
+      typeof error.details.errorCode === "string"
+        ? error.details.errorCode
+        : error.code.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+    return {
+      httpStatus: getHttpStatusFromHttpsCode(error.code),
+      code: error.code,
+      errorCode: detailCode,
+      message: error.message,
+      correlationId,
+    };
+  }
+
+  return {
+    httpStatus: 500,
+    code: "internal",
+    errorCode: "INTERNAL_ERROR",
+    message: SAFE_ERROR_MESSAGES.INTERNAL,
+    correlationId,
+  };
 }
 
 function buildSearchCandidates(searchText) {
@@ -444,7 +500,9 @@ function enforceRateLimit(scope, identity) {
   const activeWindow = recent.filter((entry) => now - entry < RATE_LIMIT_WINDOW_MS);
 
   if (activeWindow.length >= RATE_LIMIT_MAX_REQUESTS) {
-    throw new HttpsError("resource-exhausted", "Too many requests. Try again later.");
+    throw new HttpsError("resource-exhausted", "Too many requests. Try again later.", {
+      errorCode: "RATE_LIMITED",
+    });
   }
 
   activeWindow.push(now);
@@ -472,7 +530,11 @@ function requireCallableAuthAndAppCheck(request, functionName) {
       callerUid,
       rejectionReason: "missing-auth",
     });
-    throw new HttpsError("unauthenticated", "Authentication is required.");
+    throw new HttpsError(
+      "unauthenticated",
+      SAFE_ERROR_MESSAGES.AUTH_REQUIRED,
+      { errorCode: "AUTH_REQUIRED" },
+    );
   }
 
   if (!request?.app?.appId) {
@@ -481,7 +543,11 @@ function requireCallableAuthAndAppCheck(request, functionName) {
       callerUid,
       rejectionReason: "missing-app-check",
     });
-    throw new HttpsError("unauthenticated", "App Check is required.");
+    throw new HttpsError(
+      "unauthenticated",
+      SAFE_ERROR_MESSAGES.APP_CHECK_REQUIRED,
+      { errorCode: "APP_CHECK_REQUIRED" },
+    );
   }
 
   enforceRateLimit(functionName, `uid:${request.auth.uid}`);
@@ -509,7 +575,11 @@ async function verifyHttpAuthAndAppCheck(request, functionName) {
       callerUid: "anonymous",
       rejectionReason: "missing-auth-token",
     });
-    throw new HttpsError("unauthenticated", "Authentication is required.");
+    throw new HttpsError(
+      "unauthenticated",
+      SAFE_ERROR_MESSAGES.AUTH_REQUIRED,
+      { errorCode: "AUTH_REQUIRED" },
+    );
   }
 
   const appCheckToken = request?.headers?.["x-firebase-appcheck"];
@@ -519,7 +589,11 @@ async function verifyHttpAuthAndAppCheck(request, functionName) {
       callerUid: "anonymous",
       rejectionReason: "missing-app-check-token",
     });
-    throw new HttpsError("unauthenticated", "App Check is required.");
+    throw new HttpsError(
+      "unauthenticated",
+      SAFE_ERROR_MESSAGES.APP_CHECK_REQUIRED,
+      { errorCode: "APP_CHECK_REQUIRED" },
+    );
   }
 
   let decodedIdToken;
@@ -531,7 +605,11 @@ async function verifyHttpAuthAndAppCheck(request, functionName) {
       callerUid: "anonymous",
       rejectionReason: "invalid-auth-token",
     });
-    throw new HttpsError("unauthenticated", "Authentication is required.");
+    throw new HttpsError(
+      "unauthenticated",
+      SAFE_ERROR_MESSAGES.AUTH_REQUIRED,
+      { errorCode: "AUTH_REQUIRED" },
+    );
   }
 
   try {
@@ -542,7 +620,11 @@ async function verifyHttpAuthAndAppCheck(request, functionName) {
       callerUid: decodedIdToken.uid || "anonymous",
       rejectionReason: "invalid-app-check-token",
     });
-    throw new HttpsError("unauthenticated", "App Check is required.");
+    throw new HttpsError(
+      "unauthenticated",
+      SAFE_ERROR_MESSAGES.APP_CHECK_REQUIRED,
+      { errorCode: "APP_CHECK_REQUIRED" },
+    );
   }
 
   const callerUid = decodedIdToken.uid || "anonymous";
@@ -676,8 +758,23 @@ exports.searchEtoroInstruments = onCall(
     enforceAppCheck: true,
   },
   async (request) => {
-    requireCallableAuthAndAppCheck(request, "searchEtoroInstruments");
-    return searchEtoroAssets(request.data?.searchText);
+    const correlationId = randomUUID();
+    try {
+      requireCallableAuthAndAppCheck(request, "searchEtoroInstruments");
+      return searchEtoroAssets(request.data?.searchText);
+    } catch (error) {
+      const clientError = toClientError(error, correlationId);
+      logger.error("searchEtoroInstruments failed", {
+        correlationId,
+        code: clientError.code,
+        errorCode: clientError.errorCode,
+        rawError: error instanceof Error ? error.message : String(error),
+      });
+      throw new HttpsError(clientError.code, clientError.message, {
+        errorCode: clientError.errorCode,
+        correlationId,
+      });
+    }
   },
 );
 
@@ -688,8 +785,23 @@ exports.getEtoroInstrumentRate = onCall(
     enforceAppCheck: true,
   },
   async (request) => {
-    requireCallableAuthAndAppCheck(request, "getEtoroInstrumentRate");
-    return fetchEtoroInstrumentRate(request.data?.instrumentId);
+    const correlationId = randomUUID();
+    try {
+      requireCallableAuthAndAppCheck(request, "getEtoroInstrumentRate");
+      return fetchEtoroInstrumentRate(request.data?.instrumentId);
+    } catch (error) {
+      const clientError = toClientError(error, correlationId);
+      logger.error("getEtoroInstrumentRate failed", {
+        correlationId,
+        code: clientError.code,
+        errorCode: clientError.errorCode,
+        rawError: error instanceof Error ? error.message : String(error),
+      });
+      throw new HttpsError(clientError.code, clientError.message, {
+        errorCode: clientError.errorCode,
+        correlationId,
+      });
+    }
   },
 );
 
@@ -699,8 +811,14 @@ exports.marketDataSearchHttp = onRequest(
     cors: true,
   },
   async (request, response) => {
+    const correlationId = randomUUID();
     if (request.method !== "GET") {
-      response.status(405).json({ error: "Method not allowed. Use GET." });
+      response.status(405).json({
+        error: "Method not allowed. Use GET.",
+        code: "method-not-allowed",
+        errorCode: "METHOD_NOT_ALLOWED",
+        correlationId,
+      });
       return;
     }
 
@@ -709,18 +827,19 @@ exports.marketDataSearchHttp = onRequest(
       const result = await searchEtoroAssets(request.query.searchText);
       response.status(200).json(result);
     } catch (error) {
-      if (error instanceof HttpsError) {
-        response
-          .status(error.code === "unauthenticated" ? 401 : 400)
-          .json({
-          error: error.message,
-          code: error.code,
-        });
-        return;
-      }
-
-      logger.error("marketDataSearchHttp failed", { error });
-      response.status(500).json({ error: "Internal error." });
+      const clientError = toClientError(error, correlationId);
+      logger.error("marketDataSearchHttp failed", {
+        correlationId,
+        code: clientError.code,
+        errorCode: clientError.errorCode,
+        rawError: error instanceof Error ? error.message : String(error),
+      });
+      response.status(clientError.httpStatus).json({
+        error: clientError.message,
+        code: clientError.code,
+        errorCode: clientError.errorCode,
+        correlationId,
+      });
     }
   },
 );
@@ -731,8 +850,14 @@ exports.marketDataInstrumentRatesHttp = onRequest(
     cors: true,
   },
   async (request, response) => {
+    const correlationId = randomUUID();
     if (request.method !== "GET") {
-      response.status(405).json({ error: "Method not allowed. Use GET." });
+      response.status(405).json({
+        error: "Method not allowed. Use GET.",
+        code: "method-not-allowed",
+        errorCode: "METHOD_NOT_ALLOWED",
+        correlationId,
+      });
       return;
     }
 
@@ -741,18 +866,19 @@ exports.marketDataInstrumentRatesHttp = onRequest(
       const result = await fetchEtoroInstrumentRate(request.query.instrumentId);
       response.status(200).json(result);
     } catch (error) {
-      if (error instanceof HttpsError) {
-        response
-          .status(error.code === "unauthenticated" ? 401 : 400)
-          .json({
-          error: error.message,
-          code: error.code,
-        });
-        return;
-      }
-
-      logger.error("marketDataInstrumentRatesHttp failed", { error });
-      response.status(500).json({ error: "Internal error." });
+      const clientError = toClientError(error, correlationId);
+      logger.error("marketDataInstrumentRatesHttp failed", {
+        correlationId,
+        code: clientError.code,
+        errorCode: clientError.errorCode,
+        rawError: error instanceof Error ? error.message : String(error),
+      });
+      response.status(clientError.httpStatus).json({
+        error: clientError.message,
+        code: clientError.code,
+        errorCode: clientError.errorCode,
+        correlationId,
+      });
     }
   },
 );
@@ -772,5 +898,7 @@ exports.__test = {
   enforceRateLimit,
   buildSearchCandidates,
   verifyHttpAuthAndAppCheck,
+  toClientError,
+  getHttpStatusFromHttpsCode,
   __rateLimitBuckets: rateLimitBuckets,
 };
