@@ -5,3 +5,6 @@ web/dist
 functions/lib
 web/.env
 firebase-debug.log
+web/playwright-report
+web/test-results
+web/playwright/.cache
