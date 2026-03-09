@@ -616,6 +616,20 @@ function evaluateFirestoreCondition(condition, currentPrice, targetPrice) {
   return currentPrice <= targetPrice;
 }
 
+function toNotificationFailureMessage(error) {
+  const fallback = "Notification delivery failed.";
+  if (!(error instanceof Error) || typeof error.message !== "string") {
+    return fallback;
+  }
+
+  const trimmed = error.message.trim();
+  if (!trimmed) {
+    return fallback;
+  }
+
+  return trimmed.slice(0, 500);
+}
+
 async function verifyHttpAuthAndAppCheck(request, functionName) {
   const idToken = parseBearerToken(request?.headers?.authorization);
   if (!idToken) {
@@ -932,6 +946,42 @@ exports.marketDataInstrumentRatesHttp = onRequest(
   },
 );
 
+exports.listUserNotifications = onCall(
+  {
+    cors: true,
+    enforceAppCheck: true,
+  },
+  async (request) => {
+    const correlationId = randomUUID();
+    try {
+      const callerUid = requireCallableAuthAndAppCheck(request, "listUserNotifications");
+      const snapshot = await admin.firestore().collection("notifications")
+        .where("userId", "==", callerUid)
+        .get();
+      const items = snapshot.docs
+        .map((docSnapshot) => ({ id: docSnapshot.id, ...docSnapshot.data() }))
+        .sort((a, b) => {
+          const aDate = asDate(a.createdAt);
+          const bDate = asDate(b.createdAt);
+          return (bDate?.getTime() || 0) - (aDate?.getTime() || 0);
+        });
+      return { items };
+    } catch (error) {
+      const clientError = toClientError(error, correlationId);
+      logger.error("listUserNotifications failed", {
+        correlationId,
+        code: clientError.code,
+        errorCode: clientError.errorCode,
+        rawError: error instanceof Error ? error.message : String(error),
+      });
+      throw new HttpsError(clientError.code, clientError.message, {
+        errorCode: clientError.errorCode,
+        correlationId,
+      });
+    }
+  },
+);
+
 exports.checkAlerts = onSchedule(
   {
     schedule: "every 1 minutes",
@@ -959,6 +1009,8 @@ exports.checkAlerts = onSchedule(
     const rateCache = new Map();
     const timestamp = admin.firestore.FieldValue.serverTimestamp();
     let notificationsCreated = 0;
+    let notificationsSent = 0;
+    let notificationsFailed = 0;
 
     for (const docSnapshot of dueAlerts) {
       const alert = docSnapshot.data() || {};
@@ -993,7 +1045,7 @@ exports.checkAlerts = onSchedule(
       );
 
       if (willCreateNotification) {
-        await admin.firestore().collection("notifications").add({
+        const notificationData = {
           userId: asString(alert.userId),
           alertId,
           instrumentId,
@@ -1005,8 +1057,40 @@ exports.checkAlerts = onSchedule(
           status: "pending",
           errorMessage: null,
           createdAt: timestamp,
-        });
-        notificationsCreated += 1;
+        };
+        let notificationRef = null;
+
+        try {
+          notificationRef = await admin.firestore().collection("notifications").add(notificationData);
+          notificationsCreated += 1;
+          await notificationRef.update({
+            status: "sent",
+            errorMessage: null,
+          });
+          notificationsSent += 1;
+        } catch (error) {
+          notificationsFailed += 1;
+          logger.error("checkAlerts: notification delivery update failed", {
+            alertId,
+            errorMessage: error instanceof Error ? error.message : String(error),
+          });
+
+          if (notificationRef) {
+            try {
+              await notificationRef.update({
+                status: "failed",
+                errorMessage: toNotificationFailureMessage(error),
+              });
+            } catch (nestedError) {
+              logger.error("checkAlerts: notification failure status update failed", {
+                alertId,
+                errorMessage: nestedError instanceof Error ?
+                  nestedError.message :
+                  String(nestedError),
+              });
+            }
+          }
+        }
       }
 
       await docSnapshot.ref.update({
@@ -1020,6 +1104,8 @@ exports.checkAlerts = onSchedule(
       activeAlerts: snapshot.size,
       dueAlerts: dueAlerts.length,
       notificationsCreated,
+      notificationsSent,
+      notificationsFailed,
     });
   },
 );
@@ -1040,6 +1126,7 @@ exports.__test = {
   isAlertDue,
   shouldCreateNotification,
   evaluateFirestoreCondition,
+  toNotificationFailureMessage,
   enforceRateLimit,
   buildSearchCandidates,
   verifyHttpAuthAndAppCheck,

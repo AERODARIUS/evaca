@@ -33,7 +33,7 @@
   - Write notification documents to Firestore `notifications` when triggered
   - Prevent duplicate notifications for unchanged conditions
 
-- [ ] `SOTRY-6` Add notification delivery pipeline (phase 1: in-app history):
+- [x] `SOTRY-6` Add notification delivery pipeline (phase 1: in-app history):
   - Persist each trigger event in `notifications`
   - Mark status (`pending`, `sent`, `failed`)
   - Link notification to alert + user

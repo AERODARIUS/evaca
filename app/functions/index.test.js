@@ -206,3 +206,16 @@ test("evaluateFirestoreCondition supports above and below conditions", () => {
   assert.equal(__test.evaluateFirestoreCondition("below", 80, 100), true);
   assert.equal(__test.evaluateFirestoreCondition("above", 90, 100), false);
 });
+
+test("toNotificationFailureMessage returns fallback for non-errors", () => {
+  assert.equal(
+    __test.toNotificationFailureMessage(null),
+    "Notification delivery failed.",
+  );
+});
+
+test("toNotificationFailureMessage truncates long messages", () => {
+  const longMessage = "x".repeat(600);
+  const message = __test.toNotificationFailureMessage(new Error(longMessage));
+  assert.equal(message.length, 500);
+});
