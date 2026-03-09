@@ -1,5 +1,6 @@
 const { randomUUID } = require("crypto");
 const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { defineSecret } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
 const admin = require("firebase-admin");
@@ -567,6 +568,54 @@ function parseBearerToken(authHeader) {
   return token.trim();
 }
 
+function asDate(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (value instanceof Date) {
+    return value;
+  }
+
+  if (typeof value.toDate === "function") {
+    return value.toDate();
+  }
+
+  return null;
+}
+
+function isAlertDue(lastCheckedAtValue, intervalMinutes, nowMs = Date.now()) {
+  const checkedAt = asDate(lastCheckedAtValue);
+  if (!checkedAt) {
+    return true;
+  }
+
+  const intervalMs = Math.max(1, Number(intervalMinutes) || 1) * 60 * 1000;
+  return nowMs - checkedAt.getTime() >= intervalMs;
+}
+
+function shouldCreateNotification(conditionMatched, lastTriggeredAtValue, lastCheckedAtValue) {
+  if (!conditionMatched) {
+    return false;
+  }
+
+  const lastTriggeredAt = asDate(lastTriggeredAtValue);
+  const lastCheckedAt = asDate(lastCheckedAtValue);
+  if (!lastTriggeredAt || !lastCheckedAt) {
+    return true;
+  }
+
+  return lastTriggeredAt.getTime() < lastCheckedAt.getTime();
+}
+
+function evaluateFirestoreCondition(condition, currentPrice, targetPrice) {
+  if (condition === "above" || condition === "gte") {
+    return currentPrice >= targetPrice;
+  }
+
+  return currentPrice <= targetPrice;
+}
+
 async function verifyHttpAuthAndAppCheck(request, functionName) {
   const idToken = parseBearerToken(request?.headers?.authorization);
   if (!idToken) {
@@ -883,6 +932,98 @@ exports.marketDataInstrumentRatesHttp = onRequest(
   },
 );
 
+exports.checkAlerts = onSchedule(
+  {
+    schedule: "every 1 minutes",
+    timeZone: "Etc/UTC",
+    secrets: [ETORO_API_KEY, ETORO_USER_KEY],
+  },
+  async () => {
+    const snapshot = await admin.firestore().collection("alerts").where("isActive", "==", true).get();
+    if (snapshot.empty) {
+      logger.info("checkAlerts: no active alerts found");
+      return;
+    }
+
+    const nowMs = Date.now();
+    const dueAlerts = snapshot.docs.filter((docSnapshot) => {
+      const alert = docSnapshot.data() || {};
+      return isAlertDue(alert.lastCheckedAt, alert.intervalMinutes, nowMs);
+    });
+
+    if (dueAlerts.length === 0) {
+      logger.info("checkAlerts: no alerts due for evaluation");
+      return;
+    }
+
+    const rateCache = new Map();
+    const timestamp = admin.firestore.FieldValue.serverTimestamp();
+    let notificationsCreated = 0;
+
+    for (const docSnapshot of dueAlerts) {
+      const alert = docSnapshot.data() || {};
+      const alertId = docSnapshot.id;
+      const instrumentId = asNumber(alert.instrumentId);
+      const targetPrice = asNumber(alert.targetPrice);
+      const condition = asString(alert.condition);
+
+      if (!instrumentId || targetPrice === null || !condition) {
+        logger.warn("checkAlerts: invalid alert payload skipped", { alertId });
+        continue;
+      }
+
+      let triggerPrice;
+      if (rateCache.has(instrumentId)) {
+        triggerPrice = rateCache.get(instrumentId);
+      } else {
+        const rateResult = await fetchEtoroInstrumentRate(instrumentId);
+        triggerPrice = rateResult.rate;
+        rateCache.set(instrumentId, triggerPrice);
+      }
+
+      const conditionMatched = evaluateFirestoreCondition(
+        condition,
+        triggerPrice,
+        targetPrice,
+      );
+      const willCreateNotification = shouldCreateNotification(
+        conditionMatched,
+        alert.lastTriggeredAt,
+        alert.lastCheckedAt,
+      );
+
+      if (willCreateNotification) {
+        await admin.firestore().collection("notifications").add({
+          userId: asString(alert.userId),
+          alertId,
+          instrumentId,
+          symbol: asString(alert.symbol),
+          displayName: asString(alert.displayName),
+          condition,
+          targetPrice,
+          triggerPrice,
+          status: "pending",
+          errorMessage: null,
+          createdAt: timestamp,
+        });
+        notificationsCreated += 1;
+      }
+
+      await docSnapshot.ref.update({
+        lastCheckedAt: timestamp,
+        ...(willCreateNotification ? { lastTriggeredAt: timestamp } : {}),
+        updatedAt: timestamp,
+      });
+    }
+
+    logger.info("checkAlerts: evaluation completed", {
+      activeAlerts: snapshot.size,
+      dueAlerts: dueAlerts.length,
+      notificationsCreated,
+    });
+  },
+);
+
 exports.__test = {
   extractItems,
   normalizeInstrument,
@@ -895,6 +1036,10 @@ exports.__test = {
   parseBearerToken,
   requireCallableAuthAndAppCheck,
   getClientIp,
+  asDate,
+  isAlertDue,
+  shouldCreateNotification,
+  evaluateFirestoreCondition,
   enforceRateLimit,
   buildSearchCandidates,
   verifyHttpAuthAndAppCheck,

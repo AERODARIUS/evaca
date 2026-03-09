@@ -174,3 +174,35 @@ test("toClientError masks unknown errors with internal response", () => {
     correlationId: "corr-456",
   });
 });
+
+test("isAlertDue returns true when alert never checked", () => {
+  assert.equal(__test.isAlertDue(null, 15, Date.UTC(2026, 0, 1, 12, 0, 0)), true);
+});
+
+test("isAlertDue respects configured interval", () => {
+  const checkedAt = new Date(Date.UTC(2026, 0, 1, 11, 50, 0));
+  const dueAtNoon = __test.isAlertDue(checkedAt, 10, Date.UTC(2026, 0, 1, 12, 0, 0));
+  const notDueAt1155 = __test.isAlertDue(checkedAt, 10, Date.UTC(2026, 0, 1, 11, 55, 0));
+
+  assert.equal(dueAtNoon, true);
+  assert.equal(notDueAt1155, false);
+});
+
+test("shouldCreateNotification suppresses duplicates while condition remains true", () => {
+  const baseline = new Date(Date.UTC(2026, 0, 1, 12, 0, 0));
+  assert.equal(__test.shouldCreateNotification(true, baseline, baseline), false);
+  assert.equal(
+    __test.shouldCreateNotification(
+      true,
+      new Date(Date.UTC(2026, 0, 1, 11, 50, 0)),
+      new Date(Date.UTC(2026, 0, 1, 12, 0, 0)),
+    ),
+    true,
+  );
+});
+
+test("evaluateFirestoreCondition supports above and below conditions", () => {
+  assert.equal(__test.evaluateFirestoreCondition("above", 150, 100), true);
+  assert.equal(__test.evaluateFirestoreCondition("below", 80, 100), true);
+  assert.equal(__test.evaluateFirestoreCondition("above", 90, 100), false);
+});

@@ -25,7 +25,7 @@
   - Add function to fetch current rates (`/market-data/instruments/rates`)
   - Map eToro response to internal alert asset shape
 
-- [ ] `SOTRY-5` Implement scheduled price monitoring (Cloud Functions scheduler):
+- [x] `SOTRY-5` Implement scheduled price monitoring (Cloud Functions scheduler):
   - Run at configured cadence
   - Load active alerts
   - Fetch latest prices from eToro
