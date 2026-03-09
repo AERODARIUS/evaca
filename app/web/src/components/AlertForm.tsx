@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, KeyboardEvent, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Button,
@@ -27,11 +27,18 @@ interface Props {
 }
 
 type NotificationChannel = 'inApp' | 'email' | 'push';
-type SearchFeedbackType = 'error' | 'info';
+type SearchState = 'idle' | 'loading' | 'results' | 'empty' | 'error';
 
 interface CallableErrorLike {
   code?: string;
   message?: string;
+}
+
+interface ValidationErrors {
+  alertName?: string;
+  instrument?: string;
+  targetPrice?: string;
+  interval?: string;
 }
 
 function getSearchErrorMessage(error: unknown, searchText: string): string {
@@ -72,6 +79,33 @@ function getSearchErrorMessage(error: unknown, searchText: string): string {
   return fallback;
 }
 
+function validateForm(
+  alertName: string,
+  instrument: InstrumentOption | null,
+  targetPrice: number | null,
+  frequencyMinutes: number,
+): ValidationErrors {
+  const errors: ValidationErrors = {};
+
+  if (!alertName.trim()) {
+    errors.alertName = 'Alert name is required so you can identify this trigger later.';
+  }
+
+  if (!instrument) {
+    errors.instrument = 'Select one asset from the search results before saving.';
+  }
+
+  if (targetPrice === null || Number.isNaN(targetPrice) || targetPrice <= 0) {
+    errors.targetPrice = 'Target price must be a positive number.';
+  }
+
+  if (frequencyMinutes < 1 || frequencyMinutes > 1440) {
+    errors.interval = 'Check interval must be between 1 and 1440 minutes.';
+  }
+
+  return errors;
+}
+
 export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
   const [alertName, setAlertName] = useState('');
   const [query, setQuery] = useState('');
@@ -84,10 +118,13 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
   const [isEnabled, setIsEnabled] = useState(true);
   const [currentPrice, setCurrentPrice] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [searchFeedback, setSearchFeedback] = useState<string | null>(null);
-  const [searchFeedbackType, setSearchFeedbackType] = useState<SearchFeedbackType | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [searchFeedback, setSearchFeedback] = useState<string>('Search by ticker symbol or asset name.');
+  const [searchState, setSearchState] = useState<SearchState>('idle');
   const [isSearching, setIsSearching] = useState(false);
   const [isLoadingPrice, setIsLoadingPrice] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [validationErrors, setValidationErrors] = useState<ValidationErrors>({});
 
   useEffect(() => {
     if (!editing) {
@@ -102,10 +139,13 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
       setIsEnabled(true);
       setNotificationChannels(['inApp']);
       setError(null);
-      setSearchFeedback(null);
-      setSearchFeedbackType(null);
+      setSuccessMessage(null);
+      setSearchFeedback('Search by ticker symbol or asset name.');
+      setSearchState('idle');
       setIsSearching(false);
       setIsLoadingPrice(false);
+      setIsSubmitting(false);
+      setValidationErrors({});
       return;
     }
 
@@ -123,10 +163,13 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
     setIsEnabled(editing.isActive);
     setNotificationChannels(['inApp']);
     setError(null);
-    setSearchFeedback(null);
-    setSearchFeedbackType(null);
+    setSuccessMessage(null);
+    setSearchFeedback('Search by ticker symbol or asset name.');
+    setSearchState('idle');
     setIsSearching(false);
     setIsLoadingPrice(false);
+    setIsSubmitting(false);
+    setValidationErrors({});
   }, [editing]);
 
   const searchOptions = useMemo(
@@ -142,14 +185,15 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
     const searchText = query.trim();
     if (!searchText) {
       setOptions([]);
+      setSearchState('error');
       setSearchFeedback('Enter a symbol or asset name before searching.');
-      setSearchFeedbackType('info');
       return;
     }
 
     setError(null);
-    setSearchFeedback(null);
-    setSearchFeedbackType(null);
+    setSuccessMessage(null);
+    setSearchState('loading');
+    setSearchFeedback('Searching market data...');
     setIsSearching(true);
 
     try {
@@ -158,12 +202,15 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
       const data = result.data as { items: InstrumentOption[] };
       setOptions(data.items);
       if (data.items.length === 0) {
+        setSearchState('empty');
         setSearchFeedback(`No assets found for "${searchText}". Try a ticker like XRP, BTC, or TSLA.`);
-        setSearchFeedbackType('info');
+      } else {
+        setSearchState('results');
+        setSearchFeedback(`Found ${data.items.length} result(s). Select one asset to continue.`);
       }
     } catch (searchError) {
+      setSearchState('error');
       setSearchFeedback(getSearchErrorMessage(searchError, searchText));
-      setSearchFeedbackType('error');
       setOptions([]);
     } finally {
       setIsSearching(false);
@@ -196,8 +243,7 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
     }
 
     setInstrument(selected);
-    setSearchFeedback(null);
-    setSearchFeedbackType(null);
+    setValidationErrors((current) => ({ ...current, instrument: undefined }));
     await loadRate(selected.instrumentId);
   };
 
@@ -219,26 +265,27 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
     setError(null);
+    setSuccessMessage(null);
 
-    if (!instrument) {
-      setError('Please select an asset before saving.');
-      return;
-    }
+    const nextValidationErrors = validateForm(alertName, instrument, targetPrice, frequencyMinutes);
+    setValidationErrors(nextValidationErrors);
 
-    if (targetPrice === null || Number.isNaN(targetPrice)) {
-      setError('Please provide a valid target price.');
+    if (Object.keys(nextValidationErrors).length > 0 || !instrument || targetPrice === null) {
+      setError('Please correct the highlighted fields and submit again.');
       return;
     }
 
     const payload = {
       instrumentId: instrument.instrumentId,
       symbol: instrument.symbol,
-      displayName: alertName.trim() || instrument.displayName,
+      displayName: alertName.trim(),
       targetPrice,
       condition,
       intervalMinutes: frequencyMinutes,
       isActive: isEnabled,
     };
+
+    setIsSubmitting(true);
 
     try {
       if (editing) {
@@ -250,7 +297,8 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
     } catch (submitError) {
       const message =
         submitError instanceof Error ? submitError.message : 'Unable to save alert right now.';
-      setError(message);
+      setError(`Save failed: ${message}`);
+      setIsSubmitting(false);
       return;
     }
 
@@ -264,49 +312,78 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
     setNotificationChannels(['inApp']);
     setIsEnabled(true);
     setCurrentPrice(null);
+    setValidationErrors({});
+    setSearchState('idle');
+    setSearchFeedback('Search by ticker symbol or asset name.');
+    setSuccessMessage(editing ? 'Alert updated successfully.' : 'Alert created successfully.');
+    setIsSubmitting(false);
     await onSaved();
   };
+
+  const onQueryKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void search();
+    }
+  };
+
+  const searchStatusTone = searchState === 'error' ? 'error' : searchState === 'results' ? 'success' : 'info';
 
   return (
     <PageSection
       title={editing ? 'Edit alert' : 'New alert'}
-      subtitle="Track an asset, define a trigger, and keep notifications under control."
+      subtitle="Create a precise rule using clear sections: Asset, Trigger, Notifications, and Status."
     >
       <Card className="card-surface">
         <Form layout="vertical" onSubmitCapture={onSubmit}>
-          <Form.Item label="Alert name" required>
+          <Typography.Title level={4}>Asset</Typography.Title>
+
+          <Form.Item label="Alert name" required validateStatus={validationErrors.alertName ? 'error' : ''} help={validationErrors.alertName}>
             <Input
               value={alertName}
-              onChange={(e) => setAlertName(e.target.value)}
-              placeholder="BTC breakout alert"
+              onChange={(e) => {
+                setAlertName(e.target.value);
+                if (validationErrors.alertName) {
+                  setValidationErrors((current) => ({ ...current, alertName: undefined }));
+                }
+              }}
+              placeholder="Example: BTC breakout above 70k"
               maxLength={80}
             />
           </Form.Item>
 
-          <Form.Item label="Asset selector (symbol/search)" required>
+          <Form.Item
+            label="Search asset"
+            required
+            validateStatus={validationErrors.instrument ? 'error' : ''}
+            help={validationErrors.instrument}
+          >
             <FormRow>
               <Input
                 value={query}
-                onChange={(e) => {
-                  setQuery(e.target.value);
-                  if (searchFeedback) {
-                    setSearchFeedback(null);
-                    setSearchFeedbackType(null);
-                  }
-                }}
-                placeholder="AAPL, BTC, TSLA"
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={onQueryKeyDown}
+                placeholder="Ticker or name (AAPL, BTC, Tesla)"
               />
               <Button type="default" onClick={search} loading={isSearching}>
                 Search
               </Button>
             </FormRow>
-            <FieldHint>Search and then pick a single instrument from the result list.</FieldHint>
           </Form.Item>
 
-          {searchOptions.length > 0 ? (
-            <Form.Item label="Search results">
+          <Alert className="form-alert" type={searchStatusTone} showIcon message={searchFeedback} />
+
+          {searchState === 'loading' ? (
+            <Space>
+              <Spin size="small" />
+              <Typography.Text>Loading results...</Typography.Text>
+            </Space>
+          ) : null}
+
+          {searchState === 'results' ? (
+            <Form.Item label="Select one asset" required>
               <Select
-                placeholder="Select an asset"
+                placeholder="Choose an asset from results"
                 options={searchOptions}
                 value={instrument ? String(instrument.instrumentId) : undefined}
                 onChange={(value) => {
@@ -314,15 +391,6 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
                 }}
               />
             </Form.Item>
-          ) : null}
-
-          {searchFeedback ? (
-            <Alert
-              type={searchFeedbackType === 'error' ? 'error' : 'info'}
-              showIcon
-              message={searchFeedback}
-              className="form-alert"
-            />
           ) : null}
 
           {instrument ? (
@@ -340,6 +408,8 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
 
           {currentPrice !== null ? <Typography.Text>Current price: {currentPrice}</Typography.Text> : null}
 
+          <Typography.Title level={4}>Trigger</Typography.Title>
+
           <Form.Item label="Condition" required>
             <Select
               value={condition}
@@ -351,26 +421,52 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
             />
           </Form.Item>
 
-          <Form.Item label="Target price" required>
+          <Form.Item
+            label="Target price"
+            required
+            validateStatus={validationErrors.targetPrice ? 'error' : ''}
+            help={validationErrors.targetPrice}
+          >
             <InputNumber
-              value={targetPrice}
-              onChange={(value) => setTargetPrice(typeof value === 'number' ? value : null)}
+              value={targetPrice ?? undefined}
+              onChange={(value) => {
+                setTargetPrice(typeof value === 'number' ? value : null);
+                if (validationErrors.targetPrice) {
+                  setValidationErrors((current) => ({ ...current, targetPrice: undefined }));
+                }
+              }}
               min={0.0001}
               step={0.0001}
               controls
               style={{ width: '100%' }}
+              placeholder="100.25"
             />
           </Form.Item>
 
-          <Form.Item label="Check interval (minutes)" required>
+          <Form.Item
+            label="Check interval (minutes)"
+            required
+            validateStatus={validationErrors.interval ? 'error' : ''}
+            help={validationErrors.interval}
+          >
             <InputNumber
               value={frequencyMinutes}
-              onChange={(value) => setFrequencyMinutes(typeof value === 'number' ? value : 5)}
+              onChange={(value) => {
+                setFrequencyMinutes(typeof value === 'number' ? value : 5);
+                if (validationErrors.interval) {
+                  setValidationErrors((current) => ({ ...current, interval: undefined }));
+                }
+              }}
               min={1}
               max={1440}
               style={{ width: '100%' }}
             />
+            <div>
+              <FieldHint>Use lower intervals for volatile assets and higher intervals for long-term positions.</FieldHint>
+            </div>
           </Form.Item>
+
+          <Typography.Title level={4}>Notifications</Typography.Title>
 
           <Form.Item label="Notification channel(s)">
             <Space size={16} wrap>
@@ -394,17 +490,19 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
               </Checkbox>
             </Space>
             <div>
-              <FieldHint>Delivery setup is wired in later tasks; this UI captures selection.</FieldHint>
+              <FieldHint>At least one channel is always kept active to avoid silent alerts.</FieldHint>
             </div>
           </Form.Item>
+
+          <Typography.Title level={4}>Status</Typography.Title>
 
           <Form.Item label="Enabled status" valuePropName="checked">
             <Switch checked={isEnabled} onChange={setIsEnabled} checkedChildren="Enabled" unCheckedChildren="Paused" />
           </Form.Item>
 
           <ActionBar>
-            <Button htmlType="submit" type="primary">
-              Save alert
+            <Button htmlType="submit" type="primary" loading={isSubmitting}>
+              {editing ? 'Save changes' : 'Create alert'}
             </Button>
             {editing ? (
               <Button type="default" onClick={onCancelEdit}>
@@ -413,6 +511,7 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
             ) : null}
           </ActionBar>
 
+          {successMessage ? <Alert type="success" showIcon message={successMessage} /> : null}
           {error ? <Alert type="error" showIcon message={error} /> : null}
         </Form>
       </Card>

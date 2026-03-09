@@ -72,7 +72,7 @@
   - Theme tokens are applied consistently with no mixed legacy styles in this screen.
   - Layout works in mobile (<= 768px), tablet (769-1024px), desktop (>= 1025px).
 
-- [ ] `SOTRY-11` New Alert information architecture and form UX
+- [x] `SOTRY-11` New Alert information architecture and form UX
   - Product goal: reduce completion time and prevent user input errors.
   - Scope:
   - Reorganize form into logical groups: `Asset`, `Trigger`, `Notifications`, `Status`.
