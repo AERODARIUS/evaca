@@ -1,5 +1,5 @@
 const { randomUUID } = require("crypto");
-const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
 
@@ -123,6 +123,23 @@ function normalizeInstrument(item) {
     instrumentId,
     symbol,
     displayName,
+  };
+}
+
+function normalizeInstrumentRate(item) {
+  const normalized = normalizeInstrument(item);
+  if (!normalized) {
+    return null;
+  }
+
+  const rate = extractPrice(item);
+  if (rate === null) {
+    return null;
+  }
+
+  return {
+    ...normalized,
+    rate,
   };
 }
 
@@ -365,78 +382,121 @@ function requireSecretValue(secret, label) {
   return value.trim();
 }
 
+function getEtoroSecretKeys() {
+  return {
+    apiKey: requireSecretValue(ETORO_API_KEY, "ETORO_API_KEY"),
+    userKey: requireSecretValue(ETORO_USER_KEY, "ETORO_USER_KEY"),
+  };
+}
+
+async function searchEtoroAssets(searchText) {
+  const trimmedSearchText = asString(searchText);
+  if (!trimmedSearchText) {
+    throw new HttpsError("invalid-argument", "searchText is required.");
+  }
+
+  const { apiKey, userKey } = getEtoroSecretKeys();
+  const upper = trimmedSearchText.toUpperCase();
+  const isTickerLike = /^[A-Za-z0-9._-]{1,16}$/.test(trimmedSearchText);
+
+  const query = new URLSearchParams();
+  const searchFields = "instrumentId,internalSymbolFull,displayname";
+  if (isTickerLike) {
+    query.set("internalSymbolFull", upper);
+    query.set("pageSize", "20");
+    query.set("pageNumber", "1");
+  } else {
+    query.set("searchText", trimmedSearchText);
+    query.set("pageSize", "20");
+    query.set("pageNumber", "1");
+  }
+  query.set("fields", searchFields);
+  const encodedFields = encodeURIComponent(searchFields);
+  const queryString = query
+    .toString()
+    .replace(`fields=${encodedFields}`, `fields=${searchFields}`);
+
+  logger.info("eToro search request", {
+    searchText: trimmedSearchText,
+    mode: isTickerLike ? "internalSymbolFull" : "searchText",
+    query: queryString,
+  });
+
+  const payload = await callEtoro(
+    `/market-data/search?${queryString}`,
+    apiKey,
+    userKey,
+  );
+
+  const rawItems = extractItems(payload);
+  const normalizedItems = rawItems
+    .map(normalizeInstrument)
+    .filter((item) => item !== null);
+
+  const rankedItems = rankSearchResults(normalizedItems, trimmedSearchText);
+  const items = rankedItems.filter((item) =>
+    isSearchMatch(item, trimmedSearchText),
+  );
+
+  logger.info("eToro search response", {
+    mode: isTickerLike ? "internalSymbolFull" : "searchText",
+    totalRawItems: rawItems.length,
+    totalNormalizedItems: normalizedItems.length,
+    totalMatchedItems: items.length,
+  });
+
+  return { items };
+}
+
+async function fetchEtoroInstrumentRate(instrumentIdValue) {
+  const instrumentId = asNumber(instrumentIdValue);
+  if (instrumentId === null) {
+    throw new HttpsError("invalid-argument", "instrumentId is required.");
+  }
+
+  const query = new URLSearchParams({
+    instrumentIds: String(instrumentId),
+  });
+  const { apiKey, userKey } = getEtoroSecretKeys();
+
+  const payload = await callEtoro(
+    `/market-data/instruments/rates?${query.toString()}`,
+    apiKey,
+    userKey,
+  );
+
+  const items = extractItems(payload);
+  const exactItem = items.find((item) => {
+    const itemId =
+      asNumber(item?.instrumentId) ??
+      asNumber(item?.InstrumentID) ??
+      asNumber(item?.instrumentID);
+    return itemId === instrumentId;
+  });
+
+  const selected = exactItem ?? (items.length > 0 ? items[0] : payload);
+  const item = normalizeInstrumentRate(selected);
+
+  if (!item) {
+    throw new HttpsError(
+      "not-found",
+      "Rate not available for this instrument.",
+    );
+  }
+
+  return {
+    item,
+    rate: item.rate,
+  };
+}
+
 exports.searchEtoroInstruments = onCall(
   {
     secrets: [ETORO_API_KEY, ETORO_USER_KEY],
     cors: true,
   },
   async (request) => {
-    const searchText = asString(request.data?.searchText);
-    if (!searchText) {
-      throw new HttpsError("invalid-argument", "searchText is required.");
-    }
-
-    const apiKey = requireSecretValue(ETORO_API_KEY, "ETORO_API_KEY");
-    const userKey = requireSecretValue(ETORO_USER_KEY, "ETORO_USER_KEY");
-    const upper = searchText.toUpperCase();
-    const isTickerLike = /^[A-Za-z0-9._-]{1,16}$/.test(searchText);
-
-    const query = new URLSearchParams();
-    const searchFields = "instrumentId,internalSymbolFull,displayname";
-    if (isTickerLike) {
-      query.set("internalSymbolFull", upper);
-      query.set("pageSize", "20");
-      query.set("pageNumber", "1");
-    } else {
-      query.set("searchText", searchText);
-      query.set("pageSize", "20");
-      query.set("pageNumber", "1");
-    }
-    query.set("fields", searchFields);
-    const encodedFields = encodeURIComponent(searchFields);
-    const queryString = query
-      .toString()
-      .replace(`fields=${encodedFields}`, `fields=${searchFields}`);
-
-    logger.info("eToro search request", {
-      searchText,
-      mode: isTickerLike ? "internalSymbolFull" : "searchText",
-      query: queryString,
-    });
-
-    const payload = await callEtoro(
-      `/market-data/search?${queryString}`,
-      apiKey,
-      userKey,
-    );
-
-    const rawItems = extractItems(payload);
-    let normalizedItems = rawItems.map(normalizeInstrument).filter((item) => item !== null);
-
-    const rankedItems = rankSearchResults(normalizedItems, searchText);
-    const items = rankedItems.filter((item) => isSearchMatch(item, searchText));
-
-    logger.info("eToro search response", {
-      mode: isTickerLike ? "internalSymbolFull" : "searchText",
-      totalRawItems: rawItems.length,
-      totalNormalizedItems: normalizedItems.length,
-      totalMatchedItems: items.length,
-      firstRawItem: rawItems.length > 0 ? JSON.stringify(rawItems[0]).slice(0, 1000) : null,
-      rawItemKeysSample:
-        rawItems.length > 0
-          ? rawItems
-              .slice(0, 3)
-              .map((item) =>
-                item && typeof item === "object"
-                  ? Object.keys(item).slice(0, 10)
-                  : []
-              )
-          : [],
-      firstNormalizedItem: normalizedItems.length > 0 ? normalizedItems[0] : null,
-      firstMatchedItem: items.length > 0 ? items[0] : null,
-    });
-
-    return { items };
+    return searchEtoroAssets(request.data?.searchText);
   },
 );
 
@@ -446,42 +506,75 @@ exports.getEtoroInstrumentRate = onCall(
     cors: true,
   },
   async (request) => {
-    const instrumentId = asNumber(request.data?.instrumentId);
-    if (instrumentId === null) {
-      throw new HttpsError("invalid-argument", "instrumentId is required.");
-    }
-
-    const query = new URLSearchParams({
-      instrumentIds: String(instrumentId),
-    });
-    const apiKey = requireSecretValue(ETORO_API_KEY, "ETORO_API_KEY");
-    const userKey = requireSecretValue(ETORO_USER_KEY, "ETORO_USER_KEY");
-
-    const payload = await callEtoro(
-      `/market-data/instruments/rates?${query.toString()}`,
-      apiKey,
-      userKey,
-    );
-
-    const items = extractItems(payload);
-    const exactItem = items.find((item) => {
-      const itemId =
-        asNumber(item?.instrumentId) ??
-        asNumber(item?.InstrumentID) ??
-        asNumber(item?.instrumentID);
-      return itemId === instrumentId;
-    });
-
-    const selected = exactItem ?? (items.length > 0 ? items[0] : payload);
-    const rate = extractPrice(selected);
-
-    if (rate === null) {
-      throw new HttpsError(
-        "not-found",
-        "Rate not available for this instrument.",
-      );
-    }
-
-    return { rate };
+    return fetchEtoroInstrumentRate(request.data?.instrumentId);
   },
 );
+
+exports.marketDataSearchHttp = onRequest(
+  {
+    secrets: [ETORO_API_KEY, ETORO_USER_KEY],
+    cors: true,
+  },
+  async (request, response) => {
+    if (request.method !== "GET") {
+      response.status(405).json({ error: "Method not allowed. Use GET." });
+      return;
+    }
+
+    try {
+      const result = await searchEtoroAssets(request.query.searchText);
+      response.status(200).json(result);
+    } catch (error) {
+      if (error instanceof HttpsError) {
+        response.status(400).json({
+          error: error.message,
+          code: error.code,
+        });
+        return;
+      }
+
+      logger.error("marketDataSearchHttp failed", { error });
+      response.status(500).json({ error: "Internal error." });
+    }
+  },
+);
+
+exports.marketDataInstrumentRatesHttp = onRequest(
+  {
+    secrets: [ETORO_API_KEY, ETORO_USER_KEY],
+    cors: true,
+  },
+  async (request, response) => {
+    if (request.method !== "GET") {
+      response.status(405).json({ error: "Method not allowed. Use GET." });
+      return;
+    }
+
+    try {
+      const result = await fetchEtoroInstrumentRate(request.query.instrumentId);
+      response.status(200).json(result);
+    } catch (error) {
+      if (error instanceof HttpsError) {
+        response.status(400).json({
+          error: error.message,
+          code: error.code,
+        });
+        return;
+      }
+
+      logger.error("marketDataInstrumentRatesHttp failed", { error });
+      response.status(500).json({ error: "Internal error." });
+    }
+  },
+);
+
+exports.__test = {
+  extractItems,
+  normalizeInstrument,
+  normalizeInstrumentRate,
+  extractPrice,
+  asNumber,
+  asString,
+  rankSearchResults,
+  isSearchMatch,
+};

@@ -101,6 +101,13 @@ cd app
 npm run test
 ```
 
+E2E (Playwright):
+
+```bash
+cd app
+npm run web:test:e2e
+```
+
 ## Deploy
 
 ```bash
@@ -111,6 +118,8 @@ firebase deploy --only functions,hosting,firestore:rules
 ## Functions implementadas
 - `searchEtoroInstruments`
 - `getEtoroInstrumentRate`
+- `marketDataSearchHttp` (HTTP GET wrapper for `/market-data/search`)
+- `marketDataInstrumentRatesHttp` (HTTP GET wrapper for `/market-data/instruments/rates`)
 - `listAlerts`
 - `createAlert`
 - `updateAlert`

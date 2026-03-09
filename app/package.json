@@ -14,10 +14,13 @@
     "web:build": "npm run build -w web",
     "web:preview": "npm run preview -w web",
     "web:test": "npm run test -w web",
+    "web:test:e2e": "npm run test:e2e -w web",
+    "web:test:e2e:ui": "npm run test:e2e:ui -w web",
     "functions:lint": "npm run lint -w functions",
     "functions:build": "npm run build -w functions",
     "web:deploy": "npm run web:build && mkdir -p dist && rsync -a --delete web/dist/ dist/ && firebase deploy --only hosting",
     "functions:deploy": "npm run functions:lint && npm run functions:build && firebase deploy --only functions",
-    "deploy": "npm run functions:deploy && npm run web:deploy"
+    "deploy": "npm run functions:deploy && npm run web:deploy",
+    "functions:test": "npm run test -w functions"
   }
 }
