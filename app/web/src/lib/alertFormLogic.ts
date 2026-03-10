@@ -55,7 +55,9 @@ export function validateAlertDraft(alertName: string, instrument: InstrumentOpti
     errors.targetPrice = 'Target price must be a positive number.';
   }
 
-  if (frequencyMinutes < 1 || frequencyMinutes > 1440) {
+  if (!Number.isInteger(frequencyMinutes)) {
+    errors.interval = 'Check interval must be a whole number of minutes.';
+  } else if (frequencyMinutes < 1 || frequencyMinutes > 1440) {
     errors.interval = 'Check interval must be between 1 and 1440 minutes.';
   }
 

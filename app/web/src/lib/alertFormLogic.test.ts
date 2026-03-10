@@ -21,6 +21,24 @@ describe('alert form validation and submit payload', () => {
     });
   });
 
+  it('rejects decimal interval values to match backend alert contract', () => {
+    const { errors, payload } = buildAlertPayload({
+      alertName: 'ETH alert',
+      instrument: {
+        instrumentId: 22,
+        symbol: 'ETH',
+        displayName: 'Ethereum',
+      },
+      targetPrice: 1500,
+      condition: 'lte',
+      intervalMinutes: 2.5,
+      isActive: true,
+    });
+
+    expect(payload).toBeNull();
+    expect(errors.interval).toBe('Check interval must be a whole number of minutes.');
+  });
+
   it('builds submission payload for valid form values', () => {
     const { errors, payload } = buildAlertPayload({
       alertName: ' BTC breakout above 100 ',

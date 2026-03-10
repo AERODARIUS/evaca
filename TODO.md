@@ -132,7 +132,7 @@
   - CI fails when thresholds are not met.
   - New tests are deterministic (no flaky timing/network assumptions).
 
-- [ ] `SOTRY-15` Defect remediation from unit test findings
+- [x] `SOTRY-15` Defect remediation from unit test findings
   - Product goal: convert failing tests into fixed behavior and prevent repeats.
   - Scope:
   - Run full unit test suite and categorize failures: logic, rendering, async, mock drift.
