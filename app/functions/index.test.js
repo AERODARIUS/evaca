@@ -219,3 +219,128 @@ test("toNotificationFailureMessage truncates long messages", () => {
   const message = __test.toNotificationFailureMessage(new Error(longMessage));
   assert.equal(message.length, 500);
 });
+
+test("runAlertEvaluation creates and marks notifications as sent for due matching alerts", async () => {
+  const createdNotifications = [];
+  const notificationUpdates = [];
+  const alertUpdates = [];
+  const now = Date.UTC(2026, 2, 10, 12, 0, 0);
+  const previousCheck = new Date(Date.UTC(2026, 2, 10, 11, 50, 0));
+  const mockTimestamp = { _type: "serverTimestamp" };
+
+  const snapshot = {
+    size: 1,
+    docs: [
+      {
+        id: "alert-1",
+        data() {
+          return {
+            userId: "user-1",
+            instrumentId: 101,
+            symbol: "BTC",
+            displayName: "BTC breakout",
+            condition: "above",
+            targetPrice: 100,
+            intervalMinutes: 5,
+            lastCheckedAt: previousCheck,
+            lastTriggeredAt: null,
+          };
+        },
+        ref: {
+          async update(payload) {
+            alertUpdates.push(payload);
+          },
+        },
+      },
+    ],
+  };
+
+  const result = await __test.runAlertEvaluation({
+    snapshot,
+    nowMs: now,
+    fetchRate: async () => ({ rate: 120 }),
+    createTimestamp: () => mockTimestamp,
+    addNotification: async (payload) => {
+      createdNotifications.push(payload);
+      return {
+        async update(updatePayload) {
+          notificationUpdates.push(updatePayload);
+        },
+      };
+    },
+    log: { info() {}, warn() {}, error() {} },
+  });
+
+  assert.deepEqual(result, {
+    dueAlerts: 1,
+    notificationsCreated: 1,
+    notificationsSent: 1,
+    notificationsFailed: 0,
+  });
+  assert.equal(createdNotifications.length, 1);
+  assert.equal(createdNotifications[0].status, "pending");
+  assert.equal(createdNotifications[0].triggerPrice, 120);
+  assert.deepEqual(notificationUpdates, [{ status: "sent", errorMessage: null }]);
+  assert.equal(alertUpdates.length, 1);
+  assert.equal(alertUpdates[0].lastCheckedAt, mockTimestamp);
+  assert.equal(alertUpdates[0].lastTriggeredAt, mockTimestamp);
+});
+
+test("runAlertEvaluation skips duplicate notification when condition remains matched", async () => {
+  const createdNotifications = [];
+  const alertUpdates = [];
+  const now = Date.UTC(2026, 2, 10, 12, 0, 0);
+  const previousCheck = new Date(Date.UTC(2026, 2, 10, 11, 50, 0));
+  const lastTriggeredAt = new Date(Date.UTC(2026, 2, 10, 11, 55, 0));
+  const mockTimestamp = { _type: "serverTimestamp" };
+
+  const snapshot = {
+    size: 1,
+    docs: [
+      {
+        id: "alert-2",
+        data() {
+          return {
+            userId: "user-1",
+            instrumentId: 101,
+            symbol: "BTC",
+            displayName: "BTC breakout",
+            condition: "above",
+            targetPrice: 100,
+            intervalMinutes: 5,
+            lastCheckedAt: previousCheck,
+            lastTriggeredAt,
+          };
+        },
+        ref: {
+          async update(payload) {
+            alertUpdates.push(payload);
+          },
+        },
+      },
+    ],
+  };
+
+  const result = await __test.runAlertEvaluation({
+    snapshot,
+    nowMs: now,
+    fetchRate: async () => ({ rate: 120 }),
+    createTimestamp: () => mockTimestamp,
+    addNotification: async (payload) => {
+      createdNotifications.push(payload);
+      return { async update() {} };
+    },
+    log: { info() {}, warn() {}, error() {} },
+  });
+
+  assert.deepEqual(result, {
+    dueAlerts: 1,
+    notificationsCreated: 0,
+    notificationsSent: 0,
+    notificationsFailed: 0,
+  });
+  assert.equal(createdNotifications.length, 0);
+  assert.equal(alertUpdates.length, 1);
+  assert.equal(alertUpdates[0].lastTriggeredAt, undefined);
+  assert.equal(alertUpdates[0].lastCheckedAt, mockTimestamp);
+});

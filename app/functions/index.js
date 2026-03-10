@@ -630,6 +630,139 @@ function toNotificationFailureMessage(error) {
   return trimmed.slice(0, 500);
 }
 
+async function runAlertEvaluation({
+  snapshot,
+  nowMs = Date.now(),
+  fetchRate = fetchEtoroInstrumentRate,
+  createTimestamp = () => admin.firestore.FieldValue.serverTimestamp(),
+  addNotification = (data) => admin.firestore().collection("notifications").add(data),
+  log = logger,
+}) {
+  const dueAlerts = snapshot.docs.filter((docSnapshot) => {
+    const alert = docSnapshot.data() || {};
+    return isAlertDue(alert.lastCheckedAt, alert.intervalMinutes, nowMs);
+  });
+
+  if (dueAlerts.length === 0) {
+    log.info("checkAlerts: no alerts due for evaluation");
+    return {
+      dueAlerts: 0,
+      notificationsCreated: 0,
+      notificationsSent: 0,
+      notificationsFailed: 0,
+    };
+  }
+
+  const rateCache = new Map();
+  const timestamp = createTimestamp();
+  let notificationsCreated = 0;
+  let notificationsSent = 0;
+  let notificationsFailed = 0;
+
+  for (const docSnapshot of dueAlerts) {
+    const alert = docSnapshot.data() || {};
+    const alertId = docSnapshot.id;
+    const instrumentId = asNumber(alert.instrumentId);
+    const targetPrice = asNumber(alert.targetPrice);
+    const condition = asString(alert.condition);
+
+    if (!instrumentId || targetPrice === null || !condition) {
+      log.warn("checkAlerts: invalid alert payload skipped", { alertId });
+      continue;
+    }
+
+    let triggerPrice;
+    if (rateCache.has(instrumentId)) {
+      triggerPrice = rateCache.get(instrumentId);
+    } else {
+      const rateResult = await fetchRate(instrumentId);
+      triggerPrice = rateResult.rate;
+      rateCache.set(instrumentId, triggerPrice);
+    }
+
+    const conditionMatched = evaluateFirestoreCondition(
+      condition,
+      triggerPrice,
+      targetPrice,
+    );
+    const willCreateNotification = shouldCreateNotification(
+      conditionMatched,
+      alert.lastTriggeredAt,
+      alert.lastCheckedAt,
+    );
+
+    if (willCreateNotification) {
+      const notificationData = {
+        userId: asString(alert.userId),
+        alertId,
+        instrumentId,
+        symbol: asString(alert.symbol),
+        displayName: asString(alert.displayName),
+        condition,
+        targetPrice,
+        triggerPrice,
+        status: "pending",
+        errorMessage: null,
+        createdAt: timestamp,
+      };
+      let notificationRef = null;
+
+      try {
+        notificationRef = await addNotification(notificationData);
+        notificationsCreated += 1;
+        await notificationRef.update({
+          status: "sent",
+          errorMessage: null,
+        });
+        notificationsSent += 1;
+      } catch (error) {
+        notificationsFailed += 1;
+        log.error("checkAlerts: notification delivery update failed", {
+          alertId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+
+        if (notificationRef) {
+          try {
+            await notificationRef.update({
+              status: "failed",
+              errorMessage: toNotificationFailureMessage(error),
+            });
+          } catch (nestedError) {
+            log.error("checkAlerts: notification failure status update failed", {
+              alertId,
+              errorMessage: nestedError instanceof Error ?
+                nestedError.message :
+                String(nestedError),
+            });
+          }
+        }
+      }
+    }
+
+    await docSnapshot.ref.update({
+      lastCheckedAt: timestamp,
+      ...(willCreateNotification ? { lastTriggeredAt: timestamp } : {}),
+      updatedAt: timestamp,
+    });
+  }
+
+  log.info("checkAlerts: evaluation completed", {
+    activeAlerts: snapshot.size,
+    dueAlerts: dueAlerts.length,
+    notificationsCreated,
+    notificationsSent,
+    notificationsFailed,
+  });
+
+  return {
+    dueAlerts: dueAlerts.length,
+    notificationsCreated,
+    notificationsSent,
+    notificationsFailed,
+  };
+}
+
 async function verifyHttpAuthAndAppCheck(request, functionName) {
   const idToken = parseBearerToken(request?.headers?.authorization);
   if (!idToken) {
@@ -994,119 +1127,7 @@ exports.checkAlerts = onSchedule(
       logger.info("checkAlerts: no active alerts found");
       return;
     }
-
-    const nowMs = Date.now();
-    const dueAlerts = snapshot.docs.filter((docSnapshot) => {
-      const alert = docSnapshot.data() || {};
-      return isAlertDue(alert.lastCheckedAt, alert.intervalMinutes, nowMs);
-    });
-
-    if (dueAlerts.length === 0) {
-      logger.info("checkAlerts: no alerts due for evaluation");
-      return;
-    }
-
-    const rateCache = new Map();
-    const timestamp = admin.firestore.FieldValue.serverTimestamp();
-    let notificationsCreated = 0;
-    let notificationsSent = 0;
-    let notificationsFailed = 0;
-
-    for (const docSnapshot of dueAlerts) {
-      const alert = docSnapshot.data() || {};
-      const alertId = docSnapshot.id;
-      const instrumentId = asNumber(alert.instrumentId);
-      const targetPrice = asNumber(alert.targetPrice);
-      const condition = asString(alert.condition);
-
-      if (!instrumentId || targetPrice === null || !condition) {
-        logger.warn("checkAlerts: invalid alert payload skipped", { alertId });
-        continue;
-      }
-
-      let triggerPrice;
-      if (rateCache.has(instrumentId)) {
-        triggerPrice = rateCache.get(instrumentId);
-      } else {
-        const rateResult = await fetchEtoroInstrumentRate(instrumentId);
-        triggerPrice = rateResult.rate;
-        rateCache.set(instrumentId, triggerPrice);
-      }
-
-      const conditionMatched = evaluateFirestoreCondition(
-        condition,
-        triggerPrice,
-        targetPrice,
-      );
-      const willCreateNotification = shouldCreateNotification(
-        conditionMatched,
-        alert.lastTriggeredAt,
-        alert.lastCheckedAt,
-      );
-
-      if (willCreateNotification) {
-        const notificationData = {
-          userId: asString(alert.userId),
-          alertId,
-          instrumentId,
-          symbol: asString(alert.symbol),
-          displayName: asString(alert.displayName),
-          condition,
-          targetPrice,
-          triggerPrice,
-          status: "pending",
-          errorMessage: null,
-          createdAt: timestamp,
-        };
-        let notificationRef = null;
-
-        try {
-          notificationRef = await admin.firestore().collection("notifications").add(notificationData);
-          notificationsCreated += 1;
-          await notificationRef.update({
-            status: "sent",
-            errorMessage: null,
-          });
-          notificationsSent += 1;
-        } catch (error) {
-          notificationsFailed += 1;
-          logger.error("checkAlerts: notification delivery update failed", {
-            alertId,
-            errorMessage: error instanceof Error ? error.message : String(error),
-          });
-
-          if (notificationRef) {
-            try {
-              await notificationRef.update({
-                status: "failed",
-                errorMessage: toNotificationFailureMessage(error),
-              });
-            } catch (nestedError) {
-              logger.error("checkAlerts: notification failure status update failed", {
-                alertId,
-                errorMessage: nestedError instanceof Error ?
-                  nestedError.message :
-                  String(nestedError),
-              });
-            }
-          }
-        }
-      }
-
-      await docSnapshot.ref.update({
-        lastCheckedAt: timestamp,
-        ...(willCreateNotification ? { lastTriggeredAt: timestamp } : {}),
-        updatedAt: timestamp,
-      });
-    }
-
-    logger.info("checkAlerts: evaluation completed", {
-      activeAlerts: snapshot.size,
-      dueAlerts: dueAlerts.length,
-      notificationsCreated,
-      notificationsSent,
-      notificationsFailed,
-    });
+    await runAlertEvaluation({ snapshot });
   },
 );
 
@@ -1132,5 +1153,6 @@ exports.__test = {
   verifyHttpAuthAndAppCheck,
   toClientError,
   getHttpStatusFromHttpsCode,
+  runAlertEvaluation,
   __rateLimitBuckets: rateLimitBuckets,
 };

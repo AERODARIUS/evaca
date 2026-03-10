@@ -44,7 +44,7 @@
   - Add retries + logging for eToro/API failures
   - Add basic rate-limit/backoff handling for polling
 
-- [ ] `SOTRY-8` Testing:
+- [x] `SOTRY-8` Testing:
   - Unit tests for condition evaluator
   - Integration tests for alert creation + trigger flow
   - Emulator tests for Firestore + Functions
