@@ -237,41 +237,82 @@
     - Planned-but-missing capabilities are explicitly marked as backlog items.
     - Local setup/deploy/testing instructions are verified end-to-end.
   - Dependencies: `SOTRY-5`, `SOTRY-6`
+  - Priority: `P3`
+  - Effort: `S`
+
+- [ ] `STORY-20260310-001` Make scheduler evaluation fault-tolerant and bounded
+  - Type: `ops`
+  - Area: `scheduler`
+  - Problem: `checkAlerts` loads all active alerts each minute, and `runAlertEvaluation` processes alerts serially without per-alert isolation, so one upstream rate failure can abort the whole run.
+  - Impact: Missed evaluations, long scheduler runtimes, and alert delivery gaps under provider incidents or growth in active alerts.
+  - Proposed change: Introduce bounded batches/concurrency, isolate per-alert failures, and persist due-time metadata (for example `nextCheckAt`) so scheduler queries only due alerts instead of scanning all active alerts.
+  - Acceptance criteria:
+    - A single `fetchEtoroInstrumentRate` failure does not stop processing other due alerts in the same run.
+    - Scheduler processes due alerts in bounded chunks with configurable concurrency and logs run metrics (processed, skipped, failed, duration).
+    - Due-alert selection is query-driven (no full active-alert scan) and validated with emulator/integration tests.
+  - Dependencies: `none`
+  - Priority: `P0`
+  - Effort: `L`
+
+- [ ] `STORY-20260310-002` Replace in-memory API throttling with distributed limits
+  - Type: `security`
+  - Area: `backend`
+  - Problem: Market-data rate limiting uses in-memory `Map` buckets per function instance, which is bypassable across concurrent instances and cold starts.
+  - Impact: Quota exhaustion and abuse risk remain under distributed traffic spikes despite apparent local throttling.
+  - Proposed change: Move rate limiting to a shared control plane (for example Firestore/Redis-backed token buckets or API Gateway/Cloud Armor quotas) with separate limits for user, IP, and endpoint.
+  - Acceptance criteria:
+    - Rate limits are enforced consistently across instances for both callable and HTTP market-data endpoints.
+    - Abuse tests using concurrent requests across multiple processes trigger deterministic `resource-exhausted` responses.
+    - Alerting dashboards/metrics exist for throttled requests and near-quota thresholds.
+  - Dependencies: `none`
+  - Priority: `P1`
+  - Effort: `M`
+
+- [ ] `STORY-20260310-003` Add pagination and hard limits to alert/notification reads
+  - Type: `performance`
+  - Area: `notifications`
+  - Problem: `listUserNotifications` and frontend alert listing fetch all matching documents and sort in memory, with no page size cap or cursor contract.
+  - Impact: Query latency and memory usage scale linearly with user history, increasing cost and creating avoidable DoS pressure on read-heavy users.
+  - Proposed change: Introduce cursor-based pagination with max page size, server-side ordered queries, and frontend incremental loading for alerts/notifications.
+  - Acceptance criteria:
+    - Backend notification reads use Firestore `orderBy` + `limit` + cursor tokens and reject oversized page-size requests.
+    - Frontend alert/notification views load incrementally and no longer call unbounded `getDocs` for user collections.
+    - Tests cover first-page, next-page, and empty-page behavior plus index requirements.
+  - Dependencies: `none`
+  - Priority: `P1`
+  - Effort: `M`
+
+- [ ] `STORY-20260310-004` Externalize Firebase runtime config by environment
+  - Type: `architecture`
+  - Area: `frontend`
+  - Problem: Firebase web config is hardcoded in source, coupling all local/CI builds to a single project and making environment separation brittle.
+  - Impact: Higher risk of accidental writes to the wrong Firebase project and slower setup for staging/test environments.
+  - Proposed change: Read Firebase config from typed Vite environment variables with startup validation and documented `.env` templates per environment.
+  - Acceptance criteria:
+    - `web/src/lib/firebase.ts` reads all Firebase identifiers from env variables rather than hardcoded literals.
+    - App startup fails fast with actionable errors when required env vars are missing or malformed.
+    - README/deployment docs include env setup for local, preview, and production targets.
+  - Dependencies: `none`
   - Priority: `P2`
   - Effort: `S`
 
 ### Recommended execution order
-1. `STORY-20260309-001`
-2. `SOTRY-7`
-3. `STORY-20260309-002`
-4. `STORY-20260309-004`
-5. `SOTRY-5`
-6. `SOTRY-6`
-7. `SOTRY-9`
-8. `SOTRY-10`
-9. `SOTRY-11`
-10. `SOTRY-12`
-11. `SOTRY-13`
-12. `STORY-20260309-003`
-13. `SOTRY-14`
-14. `SOTRY-15`
-15. `SOTRY-16`
-16. `SOTRY-17`
-17. `STORY-20260309-005`
+1. `STORY-20260310-001`
+2. `STORY-20260310-002`
+3. `STORY-20260310-003`
+4. `STORY-20260310-004`
+5. `STORY-20260309-003`
+6. `STORY-20260309-005`
 
 ### Story dependencies
 
-- `SOTRY-7` should start with `STORY-20260309-001` hardening and then focus on runtime retry/backoff/logging.
-- `STORY-20260309-002` depends on `STORY-20260309-001` to avoid reworking auth/error paths twice.
-- `SOTRY-5` depends on `SOTRY-7` baseline resilience controls.
-- `SOTRY-6` depends on `SOTRY-5` event generation.
-- `SOTRY-9` depends on `SOTRY-5` and `SOTRY-6`.
-- `SOTRY-11` depends on `SOTRY-10` token/component foundation.
-- `SOTRY-12` depends on `SOTRY-10` and should be included in `SOTRY-11` form layout.
-- `SOTRY-13` depends on `SOTRY-10` and `SOTRY-11`.
+- `STORY-20260310-001` has no hard prerequisite and should run first because it protects core alert-evaluation reliability.
+- `STORY-20260310-002` is independent of scheduler internals and should follow immediately to reduce abuse/quota risk.
+- `STORY-20260310-003` can proceed after security/reliability hardening and may reuse scheduler/query insights from `STORY-20260310-001`.
+- `STORY-20260310-004` is independent but should complete before further frontend refactors to avoid rework across environments.
 - `STORY-20260309-003` depends on `SOTRY-10` for stable UI primitives.
 - `SOTRY-14` depends on `SOTRY-10` to `SOTRY-13` plus `STORY-20260309-003` for stable component seams.
 - `SOTRY-15` depends on `SOTRY-14` results.
 - `SOTRY-16` depends on UI implementation from `SOTRY-10` to `SOTRY-13`.
 - `SOTRY-17` depends on `SOTRY-14` and `SOTRY-16`.
-- `STORY-20260309-005` should be completed after `SOTRY-5` and `SOTRY-6` to document real delivered behavior.
+- `STORY-20260309-005` remains a final documentation sync step after active architecture changes land.
