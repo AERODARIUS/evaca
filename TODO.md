@@ -143,7 +143,7 @@
   - Test suite passes locally and in CI.
   - Every previously failing defect has a linked test proving fix.
 
-- [ ] `SOTRY-16` Accessibility compliance remediation (WCAG 2.2 AA)
+- [x] `SOTRY-16` Accessibility compliance remediation (WCAG 2.2 AA)
   - Product goal: make critical flows usable for keyboard and assistive technology users.
   - Scope:
   - Audit `New Alert` with automated tools and manual keyboard/screen-reader checks.

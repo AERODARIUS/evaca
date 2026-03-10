@@ -16,6 +16,7 @@ interface ActionBarProps extends PropsWithChildren {
 }
 
 interface FieldHintProps extends PropsWithChildren {
+  id?: string;
 }
 
 export function PageSection({ title, subtitle, className, children }: PageSectionProps) {
@@ -34,8 +35,8 @@ export function FormRow({ className, children }: FormRowProps) {
   return <div className={className || 'form-row'}>{children}</div>;
 }
 
-export function FieldHint({ children }: FieldHintProps) {
-  return <Typography.Text type="secondary">{children}</Typography.Text>;
+export function FieldHint({ id, children }: FieldHintProps) {
+  return <Typography.Text id={id} type="secondary">{children}</Typography.Text>;
 }
 
 export function ActionBar({ className, children }: ActionBarProps) {

@@ -110,13 +110,13 @@ body {
 }
 
 .condition-toggle-gte {
-  border-color: #1f6f78 !important;
-  color: #1f6f78 !important;
+  border-color: #0f5961 !important;
+  color: #0f5961 !important;
 }
 
 .condition-toggle-lte {
-  border-color: #8d3f3f !important;
-  color: #8d3f3f !important;
+  border-color: #7d2f35 !important;
+  color: #7d2f35 !important;
 }
 
 .condition-toggle:hover,
@@ -126,6 +126,15 @@ body {
 
 .condition-toggle:focus-visible {
   outline: 3px solid #94c2ff;
+  outline-offset: 2px;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role='button']:focus-visible {
+  outline: 3px solid #2f6fdd;
   outline-offset: 2px;
 }
 

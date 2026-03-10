@@ -42,6 +42,9 @@ interface Props {
 
 type NotificationChannel = 'inApp' | 'email' | 'push';
 export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
+  const conditionHintId = 'condition-toggle-hint';
+  const intervalHintId = 'interval-hint';
+  const submitStatusId = 'alert-submit-status';
   const [alertName, setAlertName] = useState('');
   const [query, setQuery] = useState('');
   const [instrument, setInstrument] = useState<InstrumentOption | null>(null);
@@ -272,7 +275,7 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
     >
       <Card className="card-surface">
         <Form layout="vertical" onSubmitCapture={onSubmit}>
-          <Typography.Title level={4}>Asset</Typography.Title>
+          <Typography.Title level={4} id="asset-section-title">Asset</Typography.Title>
 
           <Form.Item label="Alert name" required validateStatus={validationErrors.alertName ? 'error' : ''} help={validationErrors.alertName}>
             <Input
@@ -307,7 +310,15 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
             </FormRow>
           </Form.Item>
 
-          <Alert className="form-alert" type={searchStatusTone} showIcon message={searchFeedback} />
+          <Alert
+            className="form-alert"
+            type={searchStatusTone}
+            showIcon
+            message={searchFeedback}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          />
 
           {searchState === 'loading' ? (
             <Skeleton active paragraph={{ rows: 2 }} title={false} />
@@ -341,7 +352,7 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
 
           {currentPrice !== null ? <Typography.Text>Current price: {currentPrice}</Typography.Text> : null}
 
-          <Typography.Title level={4}>Trigger</Typography.Title>
+          <Typography.Title level={4} id="trigger-section-title">Trigger</Typography.Title>
 
           <Form.Item label="Condition" required>
             <Button
@@ -350,11 +361,13 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
               onClick={onToggleCondition}
               icon={conditionPresentation.icon === 'up' ? <ArrowUpOutlined /> : <ArrowDownOutlined />}
               disabled={isSubmitting}
+              aria-pressed={condition === 'gte'}
+              aria-describedby={conditionHintId}
             >
               {conditionPresentation.label}
             </Button>
             <div>
-              <FieldHint>
+              <FieldHint id={conditionHintId}>
                 Press Enter, Space, or click to switch between Above and Below.
               </FieldHint>
             </div>
@@ -399,13 +412,14 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
               min={1}
               max={1440}
               style={{ width: '100%' }}
+              aria-describedby={intervalHintId}
             />
             <div>
-              <FieldHint>Use lower intervals for volatile assets and higher intervals for long-term positions.</FieldHint>
+              <FieldHint id={intervalHintId}>Use lower intervals for volatile assets and higher intervals for long-term positions.</FieldHint>
             </div>
           </Form.Item>
 
-          <Typography.Title level={4}>Notifications</Typography.Title>
+          <Typography.Title level={4} id="notifications-section-title">Notifications</Typography.Title>
 
           <Form.Item label="Notification channel(s)">
             <Space size={16} wrap>
@@ -433,7 +447,7 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
             </div>
           </Form.Item>
 
-          <Typography.Title level={4}>Status</Typography.Title>
+          <Typography.Title level={4} id="status-section-title">Status</Typography.Title>
 
           <Form.Item label="Enabled status" valuePropName="checked">
             <Switch checked={isEnabled} onChange={setIsEnabled} checkedChildren="Enabled" unCheckedChildren="Paused" />
@@ -450,8 +464,10 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
             ) : null}
           </ActionBar>
 
-          {successMessage ? <Alert type="success" showIcon message={successMessage} /> : null}
-          {error ? <Alert type="error" showIcon message={error} /> : null}
+          <div id={submitStatusId} aria-live="polite" aria-atomic="true">
+            {successMessage ? <Alert type="success" showIcon message={successMessage} role="status" /> : null}
+            {error ? <Alert type="error" showIcon message={error} role="alert" /> : null}
+          </div>
         </Form>
       </Card>
     </PageSection>
