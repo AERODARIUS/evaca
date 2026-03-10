@@ -157,7 +157,7 @@
   - Form can be fully completed using keyboard only.
   - Validation and status changes are announced to screen readers.
 
-- [ ] `SOTRY-17` Automated accessibility testing in pipeline
+- [x] `SOTRY-17` Automated accessibility testing in pipeline
   - Product goal: prevent accessibility regressions from re-entering the app.
   - Scope:
   - Add automated a11y tests (`jest-axe` or equivalent) for key UI states.
