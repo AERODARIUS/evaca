@@ -116,7 +116,7 @@
   - Keyboard navigation order matches visual top-to-bottom flow.
   - Loading and empty states follow same component patterns.
 
-- [ ] `SOTRY-14` Test strategy and coverage targets
+- [x] `SOTRY-14` Test strategy and coverage targets
   - Product goal: reduce regressions and speed up confident releases.
   - Scope:
   - Add unit tests for validation rules and form submission paths.

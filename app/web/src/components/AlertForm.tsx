@@ -20,6 +20,18 @@ import { functions } from '../lib/firebase';
 import { AlertRow, InstrumentOption } from '../types';
 import { createAlert, updateAlert } from '../lib/alerts';
 import { ActionBar, FieldHint, FormRow, PageSection } from './primitives';
+import {
+  buildAlertPayload,
+  getConditionPresentation,
+  getSearchErrorMessage,
+  searchIdleFeedback,
+  searchLoadingFeedback,
+  searchResultsFeedback,
+  SearchState,
+  toggleCondition,
+  ValidationErrors,
+  validateAlertDraft,
+} from '../lib/alertFormLogic';
 
 interface Props {
   userId: string;
@@ -29,85 +41,6 @@ interface Props {
 }
 
 type NotificationChannel = 'inApp' | 'email' | 'push';
-type SearchState = 'idle' | 'loading' | 'results' | 'empty' | 'error';
-
-interface CallableErrorLike {
-  code?: string;
-  message?: string;
-}
-
-interface ValidationErrors {
-  alertName?: string;
-  instrument?: string;
-  targetPrice?: string;
-  interval?: string;
-}
-
-function getSearchErrorMessage(error: unknown, searchText: string): string {
-  const fallback = `We couldn't search assets for "${searchText}" right now. Please try again.`;
-  if (!error || typeof error !== 'object') {
-    return fallback;
-  }
-
-  const callableError = error as CallableErrorLike;
-
-  switch (callableError.code) {
-    case 'functions/invalid-argument':
-      return 'Enter a symbol or asset name before searching (for example: XRP, BTC, AAPL).';
-    case 'functions/unauthenticated':
-      return 'Your session expired. Sign in again and retry the search.';
-    case 'functions/permission-denied':
-      return 'Search is currently blocked for this account. Check your Firebase/eToro setup.';
-    case 'functions/not-found':
-      return `No assets found for "${searchText}". Try a ticker symbol (XRP, BTC, TSLA).`;
-    case 'functions/unavailable':
-    case 'functions/deadline-exceeded':
-      return 'The eToro search service is temporarily unavailable. Please retry in a few seconds.';
-    case 'functions/internal':
-    case 'functions/unknown':
-      return 'Search failed in Cloud Functions. Check Functions deployment and logs for eToro errors.';
-    case 'functions/failed-precondition':
-      return 'Search is misconfigured: missing eToro API secrets in Functions.';
-    default:
-      break;
-  }
-
-  if (typeof callableError.message === 'string' && callableError.message.length > 0) {
-    if (callableError.message.toLowerCase().includes('secret')) {
-      return 'Search is misconfigured: missing eToro API secrets in Functions.';
-    }
-  }
-
-  return fallback;
-}
-
-function validateForm(
-  alertName: string,
-  instrument: InstrumentOption | null,
-  targetPrice: number | null,
-  frequencyMinutes: number,
-): ValidationErrors {
-  const errors: ValidationErrors = {};
-
-  if (!alertName.trim()) {
-    errors.alertName = 'Alert name is required so you can identify this trigger later.';
-  }
-
-  if (!instrument) {
-    errors.instrument = 'Select one asset from the search results before saving.';
-  }
-
-  if (targetPrice === null || Number.isNaN(targetPrice) || targetPrice <= 0) {
-    errors.targetPrice = 'Target price must be a positive number.';
-  }
-
-  if (frequencyMinutes < 1 || frequencyMinutes > 1440) {
-    errors.interval = 'Check interval must be between 1 and 1440 minutes.';
-  }
-
-  return errors;
-}
-
 export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
   const [alertName, setAlertName] = useState('');
   const [query, setQuery] = useState('');
@@ -121,7 +54,7 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
   const [currentPrice, setCurrentPrice] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [searchFeedback, setSearchFeedback] = useState<string>('Search by ticker symbol or asset name.');
+  const [searchFeedback, setSearchFeedback] = useState<string>(searchIdleFeedback().message);
   const [searchState, setSearchState] = useState<SearchState>('idle');
   const [isSearching, setIsSearching] = useState(false);
   const [isLoadingPrice, setIsLoadingPrice] = useState(false);
@@ -142,7 +75,7 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
       setNotificationChannels(['inApp']);
       setError(null);
       setSuccessMessage(null);
-      setSearchFeedback('Search by ticker symbol or asset name.');
+      setSearchFeedback(searchIdleFeedback().message);
       setSearchState('idle');
       setIsSearching(false);
       setIsLoadingPrice(false);
@@ -166,7 +99,7 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
     setNotificationChannels(['inApp']);
     setError(null);
     setSuccessMessage(null);
-    setSearchFeedback('Search by ticker symbol or asset name.');
+    setSearchFeedback(searchIdleFeedback().message);
     setSearchState('idle');
     setIsSearching(false);
     setIsLoadingPrice(false);
@@ -194,8 +127,9 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
 
     setError(null);
     setSuccessMessage(null);
-    setSearchState('loading');
-    setSearchFeedback('Searching market data...');
+    const loadingFeedback = searchLoadingFeedback();
+    setSearchState(loadingFeedback.state);
+    setSearchFeedback(loadingFeedback.message);
     setIsSearching(true);
 
     try {
@@ -203,13 +137,9 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
       const result = await fn({ searchText });
       const data = result.data as { items: InstrumentOption[] };
       setOptions(data.items);
-      if (data.items.length === 0) {
-        setSearchState('empty');
-        setSearchFeedback(`No assets found for "${searchText}". Try a ticker like XRP, BTC, or TSLA.`);
-      } else {
-        setSearchState('results');
-        setSearchFeedback(`Found ${data.items.length} result(s). Select one asset to continue.`);
-      }
+      const resultsFeedback = searchResultsFeedback(searchText, data.items.length);
+      setSearchState(resultsFeedback.state);
+      setSearchFeedback(resultsFeedback.message);
     } catch (searchError) {
       setSearchState('error');
       setSearchFeedback(getSearchErrorMessage(searchError, searchText));
@@ -269,23 +199,22 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
     setError(null);
     setSuccessMessage(null);
 
-    const nextValidationErrors = validateForm(alertName, instrument, targetPrice, frequencyMinutes);
+    const nextValidationErrors = validateAlertDraft(alertName, instrument, targetPrice, frequencyMinutes);
     setValidationErrors(nextValidationErrors);
 
-    if (Object.keys(nextValidationErrors).length > 0 || !instrument || targetPrice === null) {
-      setError('Please correct the highlighted fields and submit again.');
-      return;
-    }
-
-    const payload = {
-      instrumentId: instrument.instrumentId,
-      symbol: instrument.symbol,
-      displayName: alertName.trim(),
+    const { payload } = buildAlertPayload({
+      alertName,
+      instrument,
       targetPrice,
       condition,
       intervalMinutes: frequencyMinutes,
       isActive: isEnabled,
-    };
+    });
+
+    if (!payload) {
+      setError('Please correct the highlighted fields and submit again.');
+      return;
+    }
 
     setIsSubmitting(true);
 
@@ -316,14 +245,14 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
     setCurrentPrice(null);
     setValidationErrors({});
     setSearchState('idle');
-    setSearchFeedback('Search by ticker symbol or asset name.');
+    setSearchFeedback(searchIdleFeedback().message);
     setSuccessMessage(editing ? 'Alert updated successfully.' : 'Alert created successfully.');
     setIsSubmitting(false);
     await onSaved();
   };
 
-  const toggleCondition = () => {
-    setCondition((current) => (current === 'gte' ? 'lte' : 'gte'));
+  const onToggleCondition = () => {
+    setCondition((current) => toggleCondition(current));
   };
 
   const onQueryKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -334,6 +263,7 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
   };
 
   const searchStatusTone = searchState === 'error' ? 'error' : searchState === 'results' ? 'success' : 'info';
+  const conditionPresentation = getConditionPresentation(condition);
 
   return (
     <PageSection
@@ -417,11 +347,11 @@ export function AlertForm({ userId, editing, onSaved, onCancelEdit }: Props) {
             <Button
               type="default"
               className={`condition-toggle condition-toggle-${condition}`}
-              onClick={toggleCondition}
-              icon={condition === 'gte' ? <ArrowUpOutlined /> : <ArrowDownOutlined />}
+              onClick={onToggleCondition}
+              icon={conditionPresentation.icon === 'up' ? <ArrowUpOutlined /> : <ArrowDownOutlined />}
               disabled={isSubmitting}
             >
-              {condition === 'gte' ? 'Above' : 'Below'}
+              {conditionPresentation.label}
             </Button>
             <div>
               <FieldHint>
