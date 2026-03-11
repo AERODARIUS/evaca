@@ -198,7 +198,7 @@
   - Priority: `P1`
   - Effort: `S`
 
-- [ ] `STORY-20260309-003` Extract shared alert form state + market data client
+- [x] `STORY-20260309-003` Extract shared alert form state + market data client
   - Type: `refactor`
   - Area: `frontend`
   - Problem: `AlertForm` mixes UI, async calls, and duplicated reset/edit state logic, making changes risky and hard to test.
