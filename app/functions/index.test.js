@@ -228,35 +228,32 @@ test("runAlertEvaluation creates and marks notifications as sent for due matchin
   const previousCheck = new Date(Date.UTC(2026, 2, 10, 11, 50, 0));
   const mockTimestamp = { _type: "serverTimestamp" };
 
-  const snapshot = {
-    size: 1,
-    docs: [
-      {
-        id: "alert-1",
-        data() {
-          return {
-            userId: "user-1",
-            instrumentId: 101,
-            symbol: "BTC",
-            displayName: "BTC breakout",
-            condition: "above",
-            targetPrice: 100,
-            intervalMinutes: 5,
-            lastCheckedAt: previousCheck,
-            lastTriggeredAt: null,
-          };
-        },
-        ref: {
-          async update(payload) {
-            alertUpdates.push(payload);
-          },
+  const alertDocs = [
+    {
+      id: "alert-1",
+      data() {
+        return {
+          userId: "user-1",
+          instrumentId: 101,
+          symbol: "BTC",
+          displayName: "BTC breakout",
+          condition: "above",
+          targetPrice: 100,
+          intervalMinutes: 5,
+          lastCheckedAt: previousCheck,
+          lastTriggeredAt: null,
+        };
+      },
+      ref: {
+        async update(payload) {
+          alertUpdates.push(payload);
         },
       },
-    ],
-  };
+    },
+  ];
 
   const result = await __test.runAlertEvaluation({
-    snapshot,
+    alertDocs,
     nowMs: now,
     fetchRate: async () => ({ rate: 120 }),
     createTimestamp: () => mockTimestamp,
@@ -273,6 +270,9 @@ test("runAlertEvaluation creates and marks notifications as sent for due matchin
 
   assert.deepEqual(result, {
     dueAlerts: 1,
+    processedAlerts: 1,
+    skippedAlerts: 0,
+    failedAlerts: 0,
     notificationsCreated: 1,
     notificationsSent: 1,
     notificationsFailed: 0,
@@ -294,35 +294,32 @@ test("runAlertEvaluation skips duplicate notification when condition remains mat
   const lastTriggeredAt = new Date(Date.UTC(2026, 2, 10, 11, 55, 0));
   const mockTimestamp = { _type: "serverTimestamp" };
 
-  const snapshot = {
-    size: 1,
-    docs: [
-      {
-        id: "alert-2",
-        data() {
-          return {
-            userId: "user-1",
-            instrumentId: 101,
-            symbol: "BTC",
-            displayName: "BTC breakout",
-            condition: "above",
-            targetPrice: 100,
-            intervalMinutes: 5,
-            lastCheckedAt: previousCheck,
-            lastTriggeredAt,
-          };
-        },
-        ref: {
-          async update(payload) {
-            alertUpdates.push(payload);
-          },
+  const alertDocs = [
+    {
+      id: "alert-2",
+      data() {
+        return {
+          userId: "user-1",
+          instrumentId: 101,
+          symbol: "BTC",
+          displayName: "BTC breakout",
+          condition: "above",
+          targetPrice: 100,
+          intervalMinutes: 5,
+          lastCheckedAt: previousCheck,
+          lastTriggeredAt,
+        };
+      },
+      ref: {
+        async update(payload) {
+          alertUpdates.push(payload);
         },
       },
-    ],
-  };
+    },
+  ];
 
   const result = await __test.runAlertEvaluation({
-    snapshot,
+    alertDocs,
     nowMs: now,
     fetchRate: async () => ({ rate: 120 }),
     createTimestamp: () => mockTimestamp,
@@ -335,6 +332,9 @@ test("runAlertEvaluation skips duplicate notification when condition remains mat
 
   assert.deepEqual(result, {
     dueAlerts: 1,
+    processedAlerts: 1,
+    skippedAlerts: 0,
+    failedAlerts: 0,
     notificationsCreated: 0,
     notificationsSent: 0,
     notificationsFailed: 0,
@@ -343,4 +343,102 @@ test("runAlertEvaluation skips duplicate notification when condition remains mat
   assert.equal(alertUpdates.length, 1);
   assert.equal(alertUpdates[0].lastTriggeredAt, undefined);
   assert.equal(alertUpdates[0].lastCheckedAt, mockTimestamp);
+});
+
+test("runAlertEvaluation keeps processing other alerts when one rate lookup fails", async () => {
+  const now = Date.UTC(2026, 2, 10, 12, 0, 0);
+  const mockTimestamp = { _type: "serverTimestamp" };
+  const alertUpdates = [];
+
+  const alertDocs = [
+    {
+      id: "alert-failing",
+      data() {
+        return {
+          userId: "user-1",
+          instrumentId: 404,
+          symbol: "BAD",
+          displayName: "Broken instrument",
+          condition: "above",
+          targetPrice: 100,
+          intervalMinutes: 5,
+        };
+      },
+      ref: {
+        async update(payload) {
+          alertUpdates.push({ id: "alert-failing", payload });
+        },
+      },
+    },
+    {
+      id: "alert-healthy",
+      data() {
+        return {
+          userId: "user-1",
+          instrumentId: 101,
+          symbol: "BTC",
+          displayName: "Healthy instrument",
+          condition: "above",
+          targetPrice: 100,
+          intervalMinutes: 5,
+        };
+      },
+      ref: {
+        async update(payload) {
+          alertUpdates.push({ id: "alert-healthy", payload });
+        },
+      },
+    },
+  ];
+
+  const result = await __test.runAlertEvaluation({
+    alertDocs,
+    nowMs: now,
+    concurrency: 2,
+    fetchRate: async (instrumentId) => {
+      if (instrumentId === 404) {
+        throw new Error("rate unavailable");
+      }
+      return { rate: 120 };
+    },
+    createTimestamp: () => mockTimestamp,
+    addNotification: async () => ({
+      async update() {},
+    }),
+    log: { info() {}, warn() {}, error() {} },
+  });
+
+  assert.deepEqual(result, {
+    dueAlerts: 2,
+    processedAlerts: 1,
+    skippedAlerts: 0,
+    failedAlerts: 1,
+    notificationsCreated: 1,
+    notificationsSent: 1,
+    notificationsFailed: 0,
+  });
+  assert.equal(alertUpdates.length, 2);
+});
+
+test("computeNextCheckAtDate uses interval and defaults to one minute", () => {
+  const baseMs = Date.UTC(2026, 2, 10, 12, 0, 0);
+  const fromInterval = __test.computeNextCheckAtDate(10, baseMs);
+  const fromInvalid = __test.computeNextCheckAtDate(0, baseMs);
+
+  assert.equal(fromInterval.toISOString(), "2026-03-10T12:10:00.000Z");
+  assert.equal(fromInvalid.toISOString(), "2026-03-10T12:01:00.000Z");
+});
+
+test("getCheckAlertsConfig reads bounded values from env", () => {
+  const config = __test.getCheckAlertsConfig({
+    CHECK_ALERTS_BATCH_SIZE: "250",
+    CHECK_ALERTS_CONCURRENCY: "8",
+    CHECK_ALERTS_MAX_BATCHES: "4",
+  });
+
+  assert.deepEqual(config, {
+    batchSize: 250,
+    concurrency: 8,
+    maxBatches: 4,
+  });
 });

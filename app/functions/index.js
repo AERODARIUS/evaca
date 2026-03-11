@@ -22,6 +22,9 @@ const ETORO_SEARCH_MAX_PAGES = 2;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX_REQUESTS = 30;
 const RATE_LIMIT_MAX_BUCKETS = 5000;
+const DEFAULT_CHECK_ALERTS_BATCH_SIZE = 100;
+const DEFAULT_CHECK_ALERTS_CONCURRENCY = 5;
+const DEFAULT_CHECK_ALERTS_MAX_BATCHES = 10;
 const rateLimitBuckets = new Map();
 const SAFE_ERROR_MESSAGES = Object.freeze({
   ETORO_BAD_REQUEST: "Request validation failed.",
@@ -584,6 +587,62 @@ function asDate(value) {
   return null;
 }
 
+function asPositiveInteger(value, fallback, minimum = 1, maximum = 1000) {
+  const numeric = Number(value);
+  if (!Number.isInteger(numeric) || numeric < minimum) {
+    return fallback;
+  }
+
+  return Math.min(numeric, maximum);
+}
+
+function getCheckAlertsConfig(env = process.env) {
+  return {
+    batchSize: asPositiveInteger(
+      env.CHECK_ALERTS_BATCH_SIZE,
+      DEFAULT_CHECK_ALERTS_BATCH_SIZE,
+      1,
+      500,
+    ),
+    concurrency: asPositiveInteger(
+      env.CHECK_ALERTS_CONCURRENCY,
+      DEFAULT_CHECK_ALERTS_CONCURRENCY,
+      1,
+      20,
+    ),
+    maxBatches: asPositiveInteger(
+      env.CHECK_ALERTS_MAX_BATCHES,
+      DEFAULT_CHECK_ALERTS_MAX_BATCHES,
+      1,
+      100,
+    ),
+  };
+}
+
+function computeNextCheckAtDate(intervalMinutes, nowMs = Date.now()) {
+  const safeMinutes = Math.max(1, asNumber(intervalMinutes) || 1);
+  return new Date(nowMs + safeMinutes * 60 * 1000);
+}
+
+function buildDueAlertsQuery({
+  firestore,
+  nowDate,
+  batchSize,
+  cursor = null,
+}) {
+  let alertsQuery = firestore.collection("alerts")
+    .where("isActive", "==", true)
+    .where("nextCheckAt", "<=", nowDate)
+    .orderBy("nextCheckAt", "asc")
+    .limit(batchSize);
+
+  if (cursor) {
+    alertsQuery = alertsQuery.startAfter(cursor);
+  }
+
+  return alertsQuery;
+}
+
 function isAlertDue(lastCheckedAtValue, intervalMinutes, nowMs = Date.now()) {
   const checkedAt = asDate(lastCheckedAtValue);
   if (!checkedAt) {
@@ -631,22 +690,22 @@ function toNotificationFailureMessage(error) {
 }
 
 async function runAlertEvaluation({
-  snapshot,
+  alertDocs,
   nowMs = Date.now(),
   fetchRate = fetchEtoroInstrumentRate,
   createTimestamp = () => admin.firestore.FieldValue.serverTimestamp(),
   addNotification = (data) => admin.firestore().collection("notifications").add(data),
   log = logger,
+  concurrency = DEFAULT_CHECK_ALERTS_CONCURRENCY,
 }) {
-  const dueAlerts = snapshot.docs.filter((docSnapshot) => {
-    const alert = docSnapshot.data() || {};
-    return isAlertDue(alert.lastCheckedAt, alert.intervalMinutes, nowMs);
-  });
-
+  const dueAlerts = Array.isArray(alertDocs) ? alertDocs : [];
   if (dueAlerts.length === 0) {
     log.info("checkAlerts: no alerts due for evaluation");
     return {
       dueAlerts: 0,
+      processedAlerts: 0,
+      skippedAlerts: 0,
+      failedAlerts: 0,
       notificationsCreated: 0,
       notificationsSent: 0,
       notificationsFailed: 0,
@@ -658,26 +717,52 @@ async function runAlertEvaluation({
   let notificationsCreated = 0;
   let notificationsSent = 0;
   let notificationsFailed = 0;
+  let processedAlerts = 0;
+  let skippedAlerts = 0;
+  let failedAlerts = 0;
+  let nextIndex = 0;
 
-  for (const docSnapshot of dueAlerts) {
+  const processAlert = async (docSnapshot) => {
     const alert = docSnapshot.data() || {};
     const alertId = docSnapshot.id;
     const instrumentId = asNumber(alert.instrumentId);
     const targetPrice = asNumber(alert.targetPrice);
     const condition = asString(alert.condition);
+    const nextCheckAt = computeNextCheckAtDate(alert.intervalMinutes, nowMs);
 
     if (!instrumentId || targetPrice === null || !condition) {
+      skippedAlerts += 1;
       log.warn("checkAlerts: invalid alert payload skipped", { alertId });
-      continue;
+      await docSnapshot.ref.update({
+        lastCheckedAt: timestamp,
+        nextCheckAt,
+        updatedAt: timestamp,
+      });
+      return;
     }
 
-    let triggerPrice;
-    if (rateCache.has(instrumentId)) {
-      triggerPrice = rateCache.get(instrumentId);
-    } else {
-      const rateResult = await fetchRate(instrumentId);
-      triggerPrice = rateResult.rate;
-      rateCache.set(instrumentId, triggerPrice);
+    let triggerPrice = null;
+    try {
+      if (rateCache.has(instrumentId)) {
+        triggerPrice = rateCache.get(instrumentId);
+      } else {
+        const rateResult = await fetchRate(instrumentId);
+        triggerPrice = rateResult.rate;
+        rateCache.set(instrumentId, triggerPrice);
+      }
+    } catch (error) {
+      failedAlerts += 1;
+      log.error("checkAlerts: rate fetch failed", {
+        alertId,
+        instrumentId,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+      await docSnapshot.ref.update({
+        lastCheckedAt: timestamp,
+        nextCheckAt,
+        updatedAt: timestamp,
+      });
+      return;
     }
 
     const conditionMatched = evaluateFirestoreCondition(
@@ -742,14 +827,39 @@ async function runAlertEvaluation({
 
     await docSnapshot.ref.update({
       lastCheckedAt: timestamp,
+      nextCheckAt,
       ...(willCreateNotification ? { lastTriggeredAt: timestamp } : {}),
       updatedAt: timestamp,
     });
-  }
+    processedAlerts += 1;
+  };
+
+  const workers = Array.from({ length: Math.min(concurrency, dueAlerts.length) }, () =>
+    (async () => {
+      while (nextIndex < dueAlerts.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        const docSnapshot = dueAlerts[currentIndex];
+        try {
+          await processAlert(docSnapshot);
+        } catch (error) {
+          failedAlerts += 1;
+          log.error("checkAlerts: alert evaluation failed", {
+            alertId: docSnapshot?.id || "unknown",
+            errorMessage: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    })());
+
+  await Promise.all(workers);
 
   log.info("checkAlerts: evaluation completed", {
-    activeAlerts: snapshot.size,
+    activeAlerts: dueAlerts.length,
     dueAlerts: dueAlerts.length,
+    processedAlerts,
+    skippedAlerts,
+    failedAlerts,
     notificationsCreated,
     notificationsSent,
     notificationsFailed,
@@ -757,6 +867,9 @@ async function runAlertEvaluation({
 
   return {
     dueAlerts: dueAlerts.length,
+    processedAlerts,
+    skippedAlerts,
+    failedAlerts,
     notificationsCreated,
     notificationsSent,
     notificationsFailed,
@@ -1122,12 +1235,69 @@ exports.checkAlerts = onSchedule(
     secrets: [ETORO_API_KEY, ETORO_USER_KEY],
   },
   async () => {
-    const snapshot = await admin.firestore().collection("alerts").where("isActive", "==", true).get();
-    if (snapshot.empty) {
+    const startedAtMs = Date.now();
+    const nowDate = new Date(startedAtMs);
+    const { batchSize, concurrency, maxBatches } = getCheckAlertsConfig();
+    let totalDueAlerts = 0;
+    let totalProcessedAlerts = 0;
+    let totalSkippedAlerts = 0;
+    let totalFailedAlerts = 0;
+    let totalNotificationsCreated = 0;
+    let totalNotificationsSent = 0;
+    let totalNotificationsFailed = 0;
+    let cursor = null;
+
+    for (let batchIndex = 0; batchIndex < maxBatches; batchIndex += 1) {
+      const dueQuery = buildDueAlertsQuery({
+        firestore: admin.firestore(),
+        nowDate,
+        batchSize,
+        cursor,
+      });
+      const snapshot = await dueQuery.get();
+      if (snapshot.empty) {
+        break;
+      }
+
+      const evaluation = await runAlertEvaluation({
+        alertDocs: snapshot.docs,
+        nowMs: startedAtMs,
+        concurrency,
+      });
+
+      totalDueAlerts += evaluation.dueAlerts;
+      totalProcessedAlerts += evaluation.processedAlerts;
+      totalSkippedAlerts += evaluation.skippedAlerts;
+      totalFailedAlerts += evaluation.failedAlerts;
+      totalNotificationsCreated += evaluation.notificationsCreated;
+      totalNotificationsSent += evaluation.notificationsSent;
+      totalNotificationsFailed += evaluation.notificationsFailed;
+
+      if (snapshot.docs.length < batchSize) {
+        break;
+      }
+
+      cursor = snapshot.docs[snapshot.docs.length - 1];
+    }
+
+    if (totalDueAlerts === 0) {
       logger.info("checkAlerts: no active alerts found");
       return;
     }
-    await runAlertEvaluation({ snapshot });
+
+    logger.info("checkAlerts: scheduler run summary", {
+      dueAlerts: totalDueAlerts,
+      processedAlerts: totalProcessedAlerts,
+      skippedAlerts: totalSkippedAlerts,
+      failedAlerts: totalFailedAlerts,
+      notificationsCreated: totalNotificationsCreated,
+      notificationsSent: totalNotificationsSent,
+      notificationsFailed: totalNotificationsFailed,
+      durationMs: Date.now() - startedAtMs,
+      batchSize,
+      concurrency,
+      maxBatches,
+    });
   },
 );
 
@@ -1154,5 +1324,8 @@ exports.__test = {
   toClientError,
   getHttpStatusFromHttpsCode,
   runAlertEvaluation,
+  buildDueAlertsQuery,
+  computeNextCheckAtDate,
+  getCheckAlertsConfig,
   __rateLimitBuckets: rateLimitBuckets,
 };

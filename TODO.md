@@ -240,7 +240,7 @@
   - Priority: `P3`
   - Effort: `S`
 
-- [ ] `STORY-20260310-001` Make scheduler evaluation fault-tolerant and bounded
+- [x] `STORY-20260310-001` Make scheduler evaluation fault-tolerant and bounded
   - Type: `ops`
   - Area: `scheduler`
   - Problem: `checkAlerts` loads all active alerts each minute, and `runAlertEvaluation` processes alerts serially without per-alert isolation, so one upstream rate failure can abort the whole run.
