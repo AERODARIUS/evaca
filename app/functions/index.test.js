@@ -67,24 +67,22 @@ test("parseBearerToken extracts token from Bearer authorization header", () => {
   assert.equal(__test.parseBearerToken(""), null);
 });
 
-test("requireCallableAuthAndAppCheck rejects missing auth", () => {
-  assert.throws(
-    () =>
-      __test.requireCallableAuthAndAppCheck(
-        { auth: null, app: { appId: "app-1" } },
-        "searchEtoroInstruments",
-      ),
+test("requireCallableAuthAndAppCheck rejects missing auth", async () => {
+  await assert.rejects(
+    __test.requireCallableAuthAndAppCheck(
+      { auth: null, app: { appId: "app-1" } },
+      "searchEtoroInstruments",
+    ),
     (error) => error?.code === "unauthenticated",
   );
 });
 
-test("requireCallableAuthAndAppCheck rejects missing app check", () => {
-  assert.throws(
-    () =>
-      __test.requireCallableAuthAndAppCheck(
-        { auth: { uid: "user-1" }, app: null },
-        "searchEtoroInstruments",
-      ),
+test("requireCallableAuthAndAppCheck rejects missing app check", async () => {
+  await assert.rejects(
+    __test.requireCallableAuthAndAppCheck(
+      { auth: { uid: "user-1" }, app: null },
+      "searchEtoroInstruments",
+    ),
     (error) => error?.code === "unauthenticated",
   );
 });
@@ -98,16 +96,10 @@ test("getClientIp prefers x-forwarded-for first IP", () => {
   assert.equal(ip, "10.1.1.1");
 });
 
-test("enforceRateLimit blocks when window max is exceeded", () => {
-  __test.__rateLimitBuckets.clear();
-
-  for (let i = 0; i < 30; i += 1) {
-    __test.enforceRateLimit("test-scope", "uid:user-1");
-  }
-
-  assert.throws(
-    () => __test.enforceRateLimit("test-scope", "uid:user-1"),
-    (error) => error?.code === "resource-exhausted",
+test("sanitizeRateLimitKeyPart keeps only safe key characters", () => {
+  assert.equal(
+    __test.sanitizeRateLimitKeyPart("10.0.0.1 / bad key"),
+    "10.0.0.1___bad_key",
   );
 });
 
@@ -441,4 +433,97 @@ test("getCheckAlertsConfig reads bounded values from env", () => {
     concurrency: 8,
     maxBatches: 4,
   });
+});
+
+test("toRateLimitDocId creates deterministic distributed key", () => {
+  const key = __test.toRateLimitDocId({
+    scope: "uid",
+    endpoint: "searchEtoroInstruments",
+    identity: "user-1",
+    windowStartMs: 1773144000000,
+  });
+
+  assert.equal(
+    key,
+    "uid|searchetoroinstruments|user-1|1773144000000",
+  );
+});
+
+test("enforceDistributedRateLimit writes counter when under limit", async () => {
+  const writes = [];
+  const firestore = {
+    collection() {
+      return {
+        doc(id) {
+          return { id };
+        },
+      };
+    },
+    async runTransaction(handler) {
+      const transaction = {
+        async get() {
+          return {
+            exists: true,
+            data() {
+              return { count: 2 };
+            },
+          };
+        },
+        set(ref, payload, options) {
+          writes.push({ ref, payload, options });
+        },
+      };
+      await handler(transaction);
+    },
+  };
+
+  await __test.enforceDistributedRateLimit({
+    scope: "uid",
+    endpoint: "searchEtoroInstruments",
+    identity: "user-1",
+    maxRequests: 3,
+    nowMs: Date.UTC(2026, 2, 10, 12, 0, 1),
+    firestore,
+  });
+
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].payload.count, 3);
+});
+
+test("enforceDistributedRateLimit throws when request limit reached", async () => {
+  const firestore = {
+    collection() {
+      return {
+        doc(id) {
+          return { id };
+        },
+      };
+    },
+    async runTransaction(handler) {
+      const transaction = {
+        async get() {
+          return {
+            exists: true,
+            data() {
+              return { count: 30 };
+            },
+          };
+        },
+        set() {},
+      };
+      await handler(transaction);
+    },
+  };
+
+  await assert.rejects(
+    __test.enforceDistributedRateLimit({
+      scope: "uid",
+      endpoint: "searchEtoroInstruments",
+      identity: "user-1",
+      maxRequests: 30,
+      nowMs: Date.UTC(2026, 2, 10, 12, 0, 1),
+      firestore,
+    }),
+    (error) => error?.code === "resource-exhausted",
+  );
 });

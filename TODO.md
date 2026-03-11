@@ -254,7 +254,7 @@
   - Priority: `P0`
   - Effort: `L`
 
-- [ ] `STORY-20260310-002` Replace in-memory API throttling with distributed limits
+- [x] `STORY-20260310-002` Replace in-memory API throttling with distributed limits
   - Type: `security`
   - Area: `backend`
   - Problem: Market-data rate limiting uses in-memory `Map` buckets per function instance, which is bypassable across concurrent instances and cold starts.

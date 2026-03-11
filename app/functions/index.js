@@ -21,11 +21,10 @@ const ETORO_SEARCH_PAGE_SIZE = 50;
 const ETORO_SEARCH_MAX_PAGES = 2;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX_REQUESTS = 30;
-const RATE_LIMIT_MAX_BUCKETS = 5000;
+const RATE_LIMIT_COLLECTION = "_rateLimits";
 const DEFAULT_CHECK_ALERTS_BATCH_SIZE = 100;
 const DEFAULT_CHECK_ALERTS_CONCURRENCY = 5;
 const DEFAULT_CHECK_ALERTS_MAX_BATCHES = 10;
-const rateLimitBuckets = new Map();
 const SAFE_ERROR_MESSAGES = Object.freeze({
   ETORO_BAD_REQUEST: "Request validation failed.",
   ETORO_FORBIDDEN: "Request could not be authorized.",
@@ -497,36 +496,102 @@ function getClientIp(request) {
   );
 }
 
-function enforceRateLimit(scope, identity) {
-  const now = Date.now();
-  const key = `${scope}:${identity}`;
-  const recent = rateLimitBuckets.get(key) || [];
-  const activeWindow = recent.filter((entry) => now - entry < RATE_LIMIT_WINDOW_MS);
-
-  if (activeWindow.length >= RATE_LIMIT_MAX_REQUESTS) {
-    throw new HttpsError("resource-exhausted", "Too many requests. Try again later.", {
-      errorCode: "RATE_LIMITED",
-    });
-  }
-
-  activeWindow.push(now);
-  rateLimitBuckets.set(key, activeWindow);
-
-  // Keep bucket growth bounded under noisy traffic patterns.
-  if (rateLimitBuckets.size > RATE_LIMIT_MAX_BUCKETS) {
-    for (const [bucketKey, timestamps] of rateLimitBuckets.entries()) {
-      const hasActiveEntry = timestamps.some((entry) => now - entry < RATE_LIMIT_WINDOW_MS);
-      if (!hasActiveEntry) {
-        rateLimitBuckets.delete(bucketKey);
-      }
-      if (rateLimitBuckets.size <= RATE_LIMIT_MAX_BUCKETS) {
-        break;
-      }
-    }
-  }
+function sanitizeRateLimitKeyPart(value) {
+  const clean = asString(value).toLowerCase();
+  return clean.replace(/[^a-z0-9._:-]/g, "_").slice(0, 120) || "unknown";
 }
 
-function requireCallableAuthAndAppCheck(request, functionName) {
+function getRateLimitWindowStartMs(nowMs = Date.now(), windowMs = RATE_LIMIT_WINDOW_MS) {
+  return Math.floor(nowMs / windowMs) * windowMs;
+}
+
+function toRateLimitDocId({
+  scope,
+  endpoint,
+  identity,
+  windowStartMs,
+}) {
+  const keyParts = [
+    sanitizeRateLimitKeyPart(scope),
+    sanitizeRateLimitKeyPart(endpoint),
+    sanitizeRateLimitKeyPart(identity),
+    String(windowStartMs),
+  ];
+  return keyParts.join("|");
+}
+
+async function enforceDistributedRateLimit({
+  scope,
+  endpoint,
+  identity,
+  nowMs = Date.now(),
+  maxRequests = RATE_LIMIT_MAX_REQUESTS,
+  windowMs = RATE_LIMIT_WINDOW_MS,
+  firestore = admin.firestore(),
+}) {
+  const windowStartMs = getRateLimitWindowStartMs(nowMs, windowMs);
+  const rateLimitId = toRateLimitDocId({
+    scope,
+    endpoint,
+    identity,
+    windowStartMs,
+  });
+  const ref = firestore.collection(RATE_LIMIT_COLLECTION).doc(rateLimitId);
+
+  await firestore.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(ref);
+    const currentCount = snapshot.exists ? asNumber(snapshot.data()?.count) || 0 : 0;
+    if (currentCount >= maxRequests) {
+      throw new HttpsError("resource-exhausted", "Too many requests. Try again later.", {
+        errorCode: "RATE_LIMITED",
+      });
+    }
+
+    transaction.set(ref, {
+      count: currentCount + 1,
+      scope: asString(scope),
+      endpoint: asString(endpoint),
+      identity: asString(identity),
+      windowStartMs,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      expiresAt: new Date(windowStartMs + (windowMs * 2)),
+    }, { merge: true });
+  });
+}
+
+async function enforceRequesterRateLimits({
+  endpoint,
+  callerUid = null,
+  callerIp = null,
+}) {
+  const checks = [
+    enforceDistributedRateLimit({
+      scope: "endpoint",
+      endpoint,
+      identity: endpoint,
+    }),
+  ];
+
+  if (callerUid) {
+    checks.push(enforceDistributedRateLimit({
+      scope: "uid",
+      endpoint,
+      identity: callerUid,
+    }));
+  }
+
+  if (callerIp) {
+    checks.push(enforceDistributedRateLimit({
+      scope: "ip",
+      endpoint,
+      identity: callerIp,
+    }));
+  }
+
+  await Promise.all(checks);
+}
+
+async function requireCallableAuthAndAppCheck(request, functionName) {
   const callerUid = request?.auth?.uid || "anonymous";
   if (!request?.auth?.uid) {
     logger.warn("Callable request rejected", {
@@ -554,7 +619,12 @@ function requireCallableAuthAndAppCheck(request, functionName) {
     );
   }
 
-  enforceRateLimit(functionName, `uid:${request.auth.uid}`);
+  const callerIp = getClientIp(request?.rawRequest || request);
+  await enforceRequesterRateLimits({
+    endpoint: functionName,
+    callerUid: request.auth.uid,
+    callerIp,
+  });
   return request.auth.uid;
 }
 
@@ -938,8 +1008,11 @@ async function verifyHttpAuthAndAppCheck(request, functionName) {
 
   const callerUid = decodedIdToken.uid || "anonymous";
   const callerIp = getClientIp(request);
-  enforceRateLimit(functionName, `uid:${callerUid}`);
-  enforceRateLimit(functionName, `ip:${callerIp}`);
+  await enforceRequesterRateLimits({
+    endpoint: functionName,
+    callerUid,
+    callerIp,
+  });
   return { callerUid, callerIp };
 }
 
@@ -1069,7 +1142,7 @@ exports.searchEtoroInstruments = onCall(
   async (request) => {
     const correlationId = randomUUID();
     try {
-      requireCallableAuthAndAppCheck(request, "searchEtoroInstruments");
+      await requireCallableAuthAndAppCheck(request, "searchEtoroInstruments");
       return searchEtoroAssets(request.data?.searchText);
     } catch (error) {
       const clientError = toClientError(error, correlationId);
@@ -1096,7 +1169,7 @@ exports.getEtoroInstrumentRate = onCall(
   async (request) => {
     const correlationId = randomUUID();
     try {
-      requireCallableAuthAndAppCheck(request, "getEtoroInstrumentRate");
+      await requireCallableAuthAndAppCheck(request, "getEtoroInstrumentRate");
       return fetchEtoroInstrumentRate(request.data?.instrumentId);
     } catch (error) {
       const clientError = toClientError(error, correlationId);
@@ -1200,7 +1273,7 @@ exports.listUserNotifications = onCall(
   async (request) => {
     const correlationId = randomUUID();
     try {
-      const callerUid = requireCallableAuthAndAppCheck(request, "listUserNotifications");
+      const callerUid = await requireCallableAuthAndAppCheck(request, "listUserNotifications");
       const snapshot = await admin.firestore().collection("notifications")
         .where("userId", "==", callerUid)
         .get();
@@ -1318,7 +1391,11 @@ exports.__test = {
   shouldCreateNotification,
   evaluateFirestoreCondition,
   toNotificationFailureMessage,
-  enforceRateLimit,
+  enforceDistributedRateLimit,
+  enforceRequesterRateLimits,
+  getRateLimitWindowStartMs,
+  toRateLimitDocId,
+  sanitizeRateLimitKeyPart,
   buildSearchCandidates,
   verifyHttpAuthAndAppCheck,
   toClientError,
@@ -1327,5 +1404,4 @@ exports.__test = {
   buildDueAlertsQuery,
   computeNextCheckAtDate,
   getCheckAlertsConfig,
-  __rateLimitBuckets: rateLimitBuckets,
 };
