@@ -449,6 +449,24 @@ test("toRateLimitDocId creates deterministic distributed key", () => {
   );
 });
 
+test("normalizePageSize enforces defaults and max bounds", () => {
+  assert.equal(__test.normalizePageSize(undefined), 20);
+  assert.equal(__test.normalizePageSize("5"), 5);
+  assert.equal(__test.normalizePageSize("500"), 100);
+  assert.equal(__test.normalizePageSize(0), 20);
+});
+
+test("encodePageToken and decodePageToken roundtrip values", () => {
+  const token = __test.encodePageToken({ createdAtMs: 1773144000000, id: "notif-1" });
+  const decoded = __test.decodePageToken(token);
+  assert.deepEqual(decoded, { createdAtMs: 1773144000000, id: "notif-1" });
+});
+
+test("decodePageToken returns null for malformed values", () => {
+  assert.equal(__test.decodePageToken("invalid"), null);
+  assert.equal(__test.decodePageToken(__test.encodePageToken({ bad: true })), null);
+});
+
 test("enforceDistributedRateLimit writes counter when under limit", async () => {
   const writes = [];
   const firestore = {

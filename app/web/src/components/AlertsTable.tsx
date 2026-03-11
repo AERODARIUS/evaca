@@ -9,9 +9,22 @@ interface Props {
   onEdit: (alert: AlertRow) => void;
   onUpdated: () => Promise<void>;
   isLoading: boolean;
+  isLoadingMore: boolean;
+  hasMore: boolean;
+  onLoadMore: () => Promise<void>;
 }
 
-export function AlertsTable({ alerts, expandedId, onExpand, onEdit, onUpdated, isLoading }: Props) {
+export function AlertsTable({
+  alerts,
+  expandedId,
+  onExpand,
+  onEdit,
+  onUpdated,
+  isLoading,
+  isLoadingMore,
+  hasMore,
+  onLoadMore,
+}: Props) {
   const onDelete = async (id: string) => {
     const confirmed = window.confirm('Are you sure you want to delete this alert?');
     if (!confirmed) {
@@ -108,6 +121,13 @@ export function AlertsTable({ alerts, expandedId, onExpand, onEdit, onUpdated, i
           },
         }}
       />
+      {hasMore ? (
+        <div style={{ marginTop: 16, textAlign: 'center' }}>
+          <Button type="default" loading={isLoadingMore} onClick={() => void onLoadMore()}>
+            Load more alerts
+          </Button>
+        </div>
+      ) : null}
     </Card>
   );
 }

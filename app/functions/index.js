@@ -25,6 +25,8 @@ const RATE_LIMIT_COLLECTION = "_rateLimits";
 const DEFAULT_CHECK_ALERTS_BATCH_SIZE = 100;
 const DEFAULT_CHECK_ALERTS_CONCURRENCY = 5;
 const DEFAULT_CHECK_ALERTS_MAX_BATCHES = 10;
+const DEFAULT_NOTIFICATION_PAGE_SIZE = 20;
+const MAX_NOTIFICATION_PAGE_SIZE = 100;
 const SAFE_ERROR_MESSAGES = Object.freeze({
   ETORO_BAD_REQUEST: "Request validation failed.",
   ETORO_FORBIDDEN: "Request could not be authorized.",
@@ -657,6 +659,38 @@ function asDate(value) {
   return null;
 }
 
+function normalizePageSize(value, fallback = DEFAULT_NOTIFICATION_PAGE_SIZE, maximum = MAX_NOTIFICATION_PAGE_SIZE) {
+  const numeric = asNumber(value);
+  if (!numeric) {
+    return fallback;
+  }
+
+  return Math.max(1, Math.min(Math.trunc(numeric), maximum));
+}
+
+function encodePageToken(parts) {
+  return Buffer.from(JSON.stringify(parts)).toString("base64url");
+}
+
+function decodePageToken(token) {
+  const raw = asString(token);
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const decoded = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
+    const createdAtMs = asNumber(decoded?.createdAtMs);
+    const id = asString(decoded?.id);
+    if (!createdAtMs || !id) {
+      return null;
+    }
+    return { createdAtMs, id };
+  } catch (_error) {
+    return null;
+  }
+}
+
 function asPositiveInteger(value, fallback, minimum = 1, maximum = 1000) {
   const numeric = Number(value);
   if (!Number.isInteger(numeric) || numeric < minimum) {
@@ -1274,17 +1308,41 @@ exports.listUserNotifications = onCall(
     const correlationId = randomUUID();
     try {
       const callerUid = await requireCallableAuthAndAppCheck(request, "listUserNotifications");
-      const snapshot = await admin.firestore().collection("notifications")
+      const pageSize = normalizePageSize(request.data?.pageSize);
+      const cursorToken = decodePageToken(request.data?.pageToken);
+      let notificationsQuery = admin.firestore().collection("notifications")
         .where("userId", "==", callerUid)
-        .get();
-      const items = snapshot.docs
-        .map((docSnapshot) => ({ id: docSnapshot.id, ...docSnapshot.data() }))
-        .sort((a, b) => {
-          const aDate = asDate(a.createdAt);
-          const bDate = asDate(b.createdAt);
-          return (bDate?.getTime() || 0) - (aDate?.getTime() || 0);
-        });
-      return { items };
+        .orderBy("createdAt", "desc")
+        .orderBy(admin.firestore.FieldPath.documentId(), "desc")
+        .limit(pageSize + 1);
+
+      if (cursorToken) {
+        notificationsQuery = notificationsQuery.startAfter(
+          new Date(cursorToken.createdAtMs),
+          cursorToken.id,
+        );
+      }
+
+      const snapshot = await notificationsQuery.get();
+      const pageDocs = snapshot.docs.slice(0, pageSize);
+      const items = pageDocs.map((docSnapshot) => ({ id: docSnapshot.id, ...docSnapshot.data() }));
+      let nextPageToken = null;
+      if (snapshot.docs.length > pageSize) {
+        const lastDoc = pageDocs[pageDocs.length - 1];
+        const createdAt = asDate(lastDoc.data()?.createdAt);
+        if (createdAt) {
+          nextPageToken = encodePageToken({
+            createdAtMs: createdAt.getTime(),
+            id: lastDoc.id,
+          });
+        }
+      }
+
+      return {
+        items,
+        pageSize,
+        nextPageToken,
+      };
     } catch (error) {
       const clientError = toClientError(error, correlationId);
       logger.error("listUserNotifications failed", {
@@ -1396,6 +1454,9 @@ exports.__test = {
   getRateLimitWindowStartMs,
   toRateLimitDocId,
   sanitizeRateLimitKeyPart,
+  normalizePageSize,
+  encodePageToken,
+  decodePageToken,
   buildSearchCandidates,
   verifyHttpAuthAndAppCheck,
   toClientError,

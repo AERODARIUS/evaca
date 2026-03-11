@@ -268,7 +268,7 @@
   - Priority: `P1`
   - Effort: `M`
 
-- [ ] `STORY-20260310-003` Add pagination and hard limits to alert/notification reads
+- [x] `STORY-20260310-003` Add pagination and hard limits to alert/notification reads
   - Type: `performance`
   - Area: `notifications`
   - Problem: `listUserNotifications` and frontend alert listing fetch all matching documents and sort in memory, with no page size cap or cursor contract.

@@ -6,7 +6,9 @@ import { LoginForm } from './components/LoginForm';
 import { AlertsTable } from './components/AlertsTable';
 import { AlertForm } from './components/AlertForm';
 import { AlertRow } from './types';
-import { listAlerts as fetchAlerts } from './lib/alerts';
+import { listAlertsPage as fetchAlertsPage } from './lib/alerts';
+
+const ALERTS_PAGE_SIZE = 20;
 
 export function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -15,6 +17,8 @@ export function App() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editing, setEditing] = useState<AlertRow | null>(null);
   const [isAlertsLoading, setIsAlertsLoading] = useState(false);
+  const [isLoadingMoreAlerts, setIsLoadingMoreAlerts] = useState(false);
+  const [alertsPageToken, setAlertsPageToken] = useState<string | null>(null);
 
   useEffect(() => {
     return onAuthStateChanged(auth, (nextUser) => {
@@ -23,17 +27,31 @@ export function App() {
     });
   }, []);
 
-  const loadAlerts = async () => {
+  const loadAlerts = async (options?: { reset?: boolean }) => {
     if (!user) {
       return;
     }
 
-    setIsAlertsLoading(true);
+    const shouldReset = options?.reset !== false;
+    if (shouldReset) {
+      setIsAlertsLoading(true);
+    } else {
+      setIsLoadingMoreAlerts(true);
+    }
+
     try {
-      const items = await fetchAlerts(user.uid);
-      setAlerts(items);
+      const page = await fetchAlertsPage(user.uid, {
+        pageSize: ALERTS_PAGE_SIZE,
+        pageToken: shouldReset ? null : alertsPageToken,
+      });
+      setAlerts((current) => (shouldReset ? page.items : [...current, ...page.items]));
+      setAlertsPageToken(page.nextPageToken);
     } finally {
-      setIsAlertsLoading(false);
+      if (shouldReset) {
+        setIsAlertsLoading(false);
+      } else {
+        setIsLoadingMoreAlerts(false);
+      }
     }
   };
 
@@ -41,7 +59,7 @@ export function App() {
     if (!user) {
       return;
     }
-    void loadAlerts();
+    void loadAlerts({ reset: true });
   }, [user]);
 
   if (!authReady) {
@@ -78,7 +96,7 @@ export function App() {
         editing={editing}
         onCancelEdit={() => setEditing(null)}
         onSaved={async () => {
-          await loadAlerts();
+          await loadAlerts({ reset: true });
         }}
       />
 
@@ -87,8 +105,11 @@ export function App() {
         expandedId={expandedId}
         onExpand={(id) => setExpandedId(id || null)}
         onEdit={(alert) => setEditing(alert)}
-        onUpdated={loadAlerts}
+        onUpdated={async () => loadAlerts({ reset: true })}
         isLoading={isAlertsLoading}
+        isLoadingMore={isLoadingMoreAlerts}
+        hasMore={Boolean(alertsPageToken)}
+        onLoadMore={async () => loadAlerts({ reset: false })}
       />
     </main>
   );
