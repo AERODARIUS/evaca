@@ -65,13 +65,34 @@ firebase functions:secrets:set ETORO_API_KEY
 firebase functions:secrets:set ETORO_USER_KEY
 ```
 
-4. Configurar frontend (`web/.env`):
+4. Configurar frontend por entorno con variables (`Vite`):
 
 ```bash
 cp web/.env.example web/.env
 ```
 
-Completar valores Firebase web SDK.
+Completar **todas** las variables `VITE_FIREBASE_*` en cada entorno:
+- `VITE_FIREBASE_API_KEY`
+- `VITE_FIREBASE_AUTH_DOMAIN`
+- `VITE_FIREBASE_DATABASE_URL`
+- `VITE_FIREBASE_PROJECT_ID`
+- `VITE_FIREBASE_STORAGE_BUCKET`
+- `VITE_FIREBASE_MESSAGING_SENDER_ID`
+- `VITE_FIREBASE_APP_ID`
+- `VITE_FIREBASE_MEASUREMENT_ID`
+
+Para `enforceAppCheck: true`, también configurá:
+
+```bash
+VITE_FIREBASE_APPCHECK_SITE_KEY=<recaptcha-v3-site-key>
+```
+
+### Entornos frontend
+- Local: `web/.env` (no commitear secretos).
+- Preview/CI: `web/.env.preview` con proyecto Firebase de staging y variables inyectadas en pipeline.
+- Producción: `web/.env.production` con proyecto Firebase productivo y variables inyectadas en deploy.
+
+La app falla al iniciar si falta cualquier variable requerida.
 
 ## Ejecutar local
 

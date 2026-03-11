@@ -282,7 +282,7 @@
   - Priority: `P1`
   - Effort: `M`
 
-- [ ] `STORY-20260310-004` Externalize Firebase runtime config by environment
+- [x] `STORY-20260310-004` Externalize Firebase runtime config by environment
   - Type: `architecture`
   - Area: `frontend`
   - Problem: Firebase web config is hardcoded in source, coupling all local/CI builds to a single project and making environment separation brittle.
