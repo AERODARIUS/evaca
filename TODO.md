@@ -236,7 +236,7 @@
     - README function inventory matches exported functions in code.
     - Planned-but-missing capabilities are explicitly marked as backlog items.
     - Local setup/deploy/testing instructions are verified end-to-end.
-  - Dependencies: `SOTRY-5`, `SOTRY-6`
+  - Dependencies: `STORY-20260311-001`, `STORY-20260311-002`, `STORY-20260311-003`, `STORY-20260311-004`
   - Priority: `P3`
   - Effort: `S`
 
@@ -296,23 +296,95 @@
   - Priority: `P2`
   - Effort: `S`
 
+## Architecture + Engineering Audit (2026-03-11)
+
+- [ ] `STORY-20260311-001` Align Firestore rules and indexes with due-alert scheduling
+  - Type: `architecture`
+  - Area: `infra`
+  - Problem: Alert writes now include `nextCheckAt`, and scheduler/list queries depend on `nextCheckAt` and `createdAt` ordering, but current `firestore.rules` and `firestore.indexes.json` do not fully match these runtime query/write contracts.
+  - Impact: Alert create/update operations can fail with permission/index errors, scheduler runs can stall on missing indexes, and production behavior becomes environment-dependent.
+  - Proposed change: Update alert security rules to validate `nextCheckAt` and add required composite indexes for scheduler/listing query paths (`isActive + nextCheckAt`, `userId + createdAt + __name__`), then verify with emulator query/write tests.
+  - Acceptance criteria:
+    - Alert create/update from the web client succeeds with `nextCheckAt` present and validated.
+    - Scheduler due-alert query (`isActive == true` + `nextCheckAt <= now` + `orderBy(nextCheckAt)`) runs without index errors.
+    - Alert list pagination query (`userId` + ordered `createdAt` + doc id cursor) runs without index errors.
+  - Dependencies: `none`
+  - Priority: `P0`
+  - Effort: `M`
+
+- [ ] `STORY-20260311-002` Add scheduler idempotency guard for overlapping runs
+  - Type: `ops`
+  - Area: `scheduler`
+  - Problem: `checkAlerts` can overlap across scheduler invocations; notification creation is not protected by a durable idempotency key/transaction boundary, so concurrent runs can emit duplicate trigger notifications.
+  - Impact: Users can receive duplicate alerts, trust degrades, and notification volume/costs increase during high load or slow provider responses.
+  - Proposed change: Introduce an idempotent trigger write strategy (for example deterministic dedupe key per alert + check window in a transaction) and lock/lease semantics for due-alert processing.
+  - Acceptance criteria:
+    - Concurrent scheduler run simulation does not create duplicate notifications for the same alert/trigger window.
+    - Notification creation path is transactional/idempotent and retries are safe.
+    - Tests cover overlapping scheduler execution and verify single notification emission.
+  - Dependencies: `STORY-20260311-001`
+  - Priority: `P1`
+  - Effort: `L`
+
+- [ ] `STORY-20260311-003` Add Firestore rules security regression tests
+  - Type: `security`
+  - Area: `testing`
+  - Problem: There are no Firestore security-rules emulator tests validating tenant isolation and write constraints for `alerts` and `notifications`.
+  - Impact: Rule regressions can silently expose cross-user data or break critical writes until discovered in production.
+  - Proposed change: Add `@firebase/rules-unit-testing` coverage for owner-only reads/writes, immutable field constraints, and blocked notification client writes; run tests in CI.
+  - Acceptance criteria:
+    - Tests assert users cannot read/write another user’s alerts or notifications.
+    - Tests assert `alerts.createdAt` immutability and userId ownership constraints on update.
+    - CI fails when security-rules tests fail.
+  - Dependencies: `STORY-20260311-001`
+  - Priority: `P1`
+  - Effort: `M`
+
+- [ ] `STORY-20260311-004` Add dependency vulnerability scanning and patch cadence
+  - Type: `security`
+  - Area: `infra`
+  - Problem: CI does not enforce dependency vulnerability scanning for workspace and functions packages.
+  - Impact: Known vulnerable transitive dependencies can remain in production without visibility or SLA-backed remediation.
+  - Proposed change: Add automated `npm audit` (or equivalent) with severity thresholds in CI, create a monthly patch workflow, and document emergency patch protocol.
+  - Acceptance criteria:
+    - PR workflow fails on configured high/critical dependency vulnerabilities.
+    - Scheduled workflow/report surfaces vulnerable packages and ownership for remediation.
+    - Documentation defines patch SLA and rollback procedure for emergency upgrades.
+  - Dependencies: `none`
+  - Priority: `P2`
+  - Effort: `S`
+
+- [ ] `STORY-20260311-005` Upgrade runtime from Node.js 20 before EOL cutoff
+  - Type: `maintenance`
+  - Area: `infra`
+  - Problem: Node.js 20 reaches end-of-life on `2026-04-30` (obsoleta) and retirement on `2026-10-30`, while current runtime references still target Node 20.
+  - Impact: Security patch gap, higher incident risk, and potential deployment/runtime incompatibilities once Node 20 is retired.
+  - Proposed change: Upgrade all project runtimes (Cloud Functions, local dev, CI, and docs) from Node.js 20 to the latest available supported Node.js runtime and validate compatibility.
+  - Acceptance criteria:
+    - `app/functions/package.json` and related runtime config target the latest available Node.js runtime (not 20).
+    - CI and local tooling (`.nvmrc`/`.node-version` if present, workflows, scripts) are aligned to the same runtime major version.
+    - Test suite and deploy smoke checks pass on the upgraded runtime with no Node-version drift in docs.
+  - Dependencies: `none`
+  - Priority: `P1`
+  - Effort: `M`
+
 ### Recommended execution order
-1. `STORY-20260310-001`
-2. `STORY-20260310-002`
-3. `STORY-20260310-003`
-4. `STORY-20260310-004`
-5. `STORY-20260309-003`
+1. `STORY-20260311-001`
+2. `STORY-20260311-002`
+3. `STORY-20260311-003`
+4. `STORY-20260311-005`
+5. `STORY-20260311-004`
 6. `STORY-20260309-005`
 
 ### Story dependencies
 
-- `STORY-20260310-001` has no hard prerequisite and should run first because it protects core alert-evaluation reliability.
-- `STORY-20260310-002` is independent of scheduler internals and should follow immediately to reduce abuse/quota risk.
-- `STORY-20260310-003` can proceed after security/reliability hardening and may reuse scheduler/query insights from `STORY-20260310-001`.
-- `STORY-20260310-004` is independent but should complete before further frontend refactors to avoid rework across environments.
-- `STORY-20260309-003` depends on `SOTRY-10` for stable UI primitives.
+- `STORY-20260311-001` has no hard prerequisite and should run first because it removes immediate runtime failures in alert write/query paths.
+- `STORY-20260311-002` depends on scheduler/query contract stability from `STORY-20260311-001`.
+- `STORY-20260311-003` should run after `STORY-20260311-001` so rule/query test fixtures match the finalized alert schema.
+- `STORY-20260311-005` should run before broader dependency/security hardening so CI, Functions, and tooling all evaluate on the current supported Node runtime.
+- `STORY-20260311-004` is independent and can run in parallel, but stays after P0/P1 runtime risk reducers.
 - `SOTRY-14` depends on `SOTRY-10` to `SOTRY-13` plus `STORY-20260309-003` for stable component seams.
 - `SOTRY-15` depends on `SOTRY-14` results.
 - `SOTRY-16` depends on UI implementation from `SOTRY-10` to `SOTRY-13`.
 - `SOTRY-17` depends on `SOTRY-14` and `SOTRY-16`.
-- `STORY-20260309-005` remains a final documentation sync step after active architecture changes land.
+- `STORY-20260309-005` remains a final documentation sync step after active architecture/security changes land.
