@@ -212,16 +212,16 @@
   - Priority: `P2`
   - Effort: `M`
 
-- [x] `STORY-20260309-004` Enforce backend code quality gates in CI
+- [ ] `STORY-20260309-004` Enforce backend code quality gates in CI
   - Type: `quality`
-  - Area: `testing`
-  - Problem: `functions:lint` is a no-op (`echo 'No lint configured'`), so CI currently reports green without backend static checks.
-  - Impact: Preventable defects and insecure patterns can reach production undetected.
-  - Proposed change: Add ESLint + formatting checks for `app/functions`, enforce coverage threshold for function tests, and fail PR pipelines on violations.
+  - Area: `ci-cd`
+  - Problem: Backend quality gates are still weak: `functions:lint` uses a minimal custom script (no ESLint/type-aware rules) and `functions:test:coverage` enforces low thresholds (50% lines, 60% branches, 70% functions), allowing high-risk regressions to pass PR checks.
+  - Impact: CI can report green while maintainability/security defects and insufficiently tested runtime paths reach production.
+  - Proposed change: Replace the custom lint script with ESLint + formatting checks for `app/functions`, raise coverage thresholds to defensible targets, and keep PR workflows failing on violations.
   - Acceptance criteria:
-    - `npm run functions:lint` performs real linting and fails on rule violations.
-    - Functions tests publish coverage and enforce minimum threshold in CI.
-    - Both GitHub workflows fail when backend quality gates fail.
+    - `npm run functions:lint` runs ESLint over `app/functions` and fails on actionable rule violations.
+    - `functions:test:coverage` enforces updated minimum thresholds (for example >=80% lines/branches/functions) and fails below threshold.
+    - PR and merge workflows fail when backend lint or coverage checks fail.
   - Dependencies: `none`
   - Priority: `P1`
   - Effort: `M`
@@ -236,7 +236,7 @@
     - README function inventory matches exported functions in code.
     - Planned-but-missing capabilities are explicitly marked as backlog items.
     - Local setup/deploy/testing instructions are verified end-to-end.
-  - Dependencies: `STORY-20260311-001`, `STORY-20260311-002`, `STORY-20260311-003`, `STORY-20260311-004`, `STORY-20260312-001`, `STORY-20260312-002`, `STORY-20260312-003`
+  - Dependencies: `STORY-20260309-004`, `STORY-20260311-001`, `STORY-20260311-002`, `STORY-20260311-003`, `STORY-20260311-004`, `STORY-20260312-001`, `STORY-20260312-002`, `STORY-20260312-003`, `STORY-20260312-004`, `STORY-20260312-005`
   - Priority: `P3`
   - Effort: `S`
 
@@ -400,14 +400,14 @@
 
 - [ ] `STORY-20260312-003` Consolidate duplicate CI workflow sources
   - Type: `tech-debt`
-  - Area: `infra`
-  - Problem: The repository contains active workflows in `/.github/workflows` and outdated duplicates in `app/.github/workflows`, creating drift-prone CI definitions.
-  - Impact: Engineers can update the wrong workflow files, leading to false assumptions about enforced checks and deployment behavior.
-  - Proposed change: Keep one canonical workflow location, remove or clearly deprecate duplicate files, and document the CI ownership/source-of-truth path.
+  - Area: `ci-cd`
+  - Problem: The repository contains active workflows in `/.github/workflows` and outdated duplicates in `app/.github/workflows`; CI/deploy commands are also chained into a single `run` step, making failing checks harder to triage.
+  - Impact: Engineers can update the wrong workflow files and spend longer isolating pipeline failures, reducing delivery reliability and feedback quality.
+  - Proposed change: Keep one canonical workflow location, remove/deprecate duplicate files, and split the monolithic CI command into named steps so failures identify the exact broken gate.
   - Acceptance criteria:
     - Only one maintained set of workflow files remains for deploy/PR pipelines.
     - Workflow docs/readme identify the canonical path and expected quality/security gates.
-    - PR diff review makes CI changes unambiguous (no duplicate YAML drift risk).
+    - CI workflow uses named steps (`security audit`, `functions lint`, `functions tests`, `web tests`, `build`) instead of one chained command.
   - Dependencies: `none`
   - Priority: `P2`
   - Effort: `S`
@@ -426,19 +426,37 @@
   - Priority: `P2`
   - Effort: `S`
 
+- [ ] `STORY-20260312-005` Decompose Cloud Functions monolith into domain modules
+  - Type: `architecture`
+  - Area: `backend`
+  - Problem: `app/functions/index.js` has grown to ~1.7k lines and mixes HTTP/callable handlers, scheduler logic, eToro client code, validation, and rate limiting in one file.
+  - Impact: Change risk is high, code ownership is unclear, and targeted testing/refactoring is slower due to tight coupling.
+  - Proposed change: Split functions runtime into domain modules (for example `marketData`, `alerts`, `notifications`, `rateLimit`, `scheduler`, `errors`) with a thin `index.js` export surface and shared typed contracts.
+  - Acceptance criteria:
+    - `index.js` primarily wires exports and dependency composition; core logic lives in focused modules.
+    - Existing behavior is preserved and covered by updated unit/integration tests.
+    - Module boundaries and ownership are documented in `app/functions/README` or equivalent.
+  - Dependencies: `STORY-20260309-004`
+  - Priority: `P2`
+  - Effort: `L`
+
 ### Recommended execution order
 1. `STORY-20260311-003`
-2. `STORY-20260312-001`
+2. `STORY-20260309-004`
 3. `STORY-20260312-003`
-4. `STORY-20260312-004`
-5. `STORY-20260312-002`
-6. `STORY-20260309-005`
+4. `STORY-20260312-001`
+5. `STORY-20260312-005`
+6. `STORY-20260312-004`
+7. `STORY-20260312-002`
+8. `STORY-20260309-005`
 
 ### Story dependencies
 
 - `STORY-20260311-003` is now the top open item because security rule enforcement is not behavior-tested in emulator and represents the highest latent risk.
-- `STORY-20260312-001` is independent and follows security testing to reduce long-term operational/cost risk from high-churn collections.
-- `STORY-20260312-003` is independent and can be executed early to eliminate CI definition drift before future pipeline changes.
+- `STORY-20260309-004` is prioritized immediately after rules tests because stronger backend lint/coverage gates reduce regression risk for all subsequent backend work.
+- `STORY-20260312-003` follows to remove CI drift and improve failing-check observability via named workflow steps.
+- `STORY-20260312-001` is independent and next for operational/cost risk reduction on high-churn collections.
+- `STORY-20260312-005` depends on `STORY-20260309-004` so the modularization refactor runs under stronger quality gates.
 - `STORY-20260312-004` is independent and best done before broader UI quality cleanup so debug instrumentation can be controlled during remediation/testing work.
 - `STORY-20260312-002` is independent but sequenced after infra/security controls because it is user-impact quality hardening, not direct risk containment.
 - `SOTRY-14` depends on `SOTRY-10` to `SOTRY-13` plus `STORY-20260309-003` for stable component seams.
