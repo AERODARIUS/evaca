@@ -25,6 +25,8 @@ const RATE_LIMIT_COLLECTION = "_rateLimits";
 const DEFAULT_CHECK_ALERTS_BATCH_SIZE = 100;
 const DEFAULT_CHECK_ALERTS_CONCURRENCY = 5;
 const DEFAULT_CHECK_ALERTS_MAX_BATCHES = 10;
+const DEFAULT_CHECK_ALERTS_LEASE_DURATION_MS = 55 * 1000;
+const CHECK_ALERTS_LEASE_ID = "checkAlerts";
 const DEFAULT_NOTIFICATION_PAGE_SIZE = 20;
 const MAX_NOTIFICATION_PAGE_SIZE = 100;
 const SAFE_ERROR_MESSAGES = Object.freeze({
@@ -720,6 +722,115 @@ function getCheckAlertsConfig(env = process.env) {
       1,
       100,
     ),
+    leaseDurationMs: asPositiveInteger(
+      env.CHECK_ALERTS_LEASE_DURATION_MS,
+      DEFAULT_CHECK_ALERTS_LEASE_DURATION_MS,
+      10 * 1000,
+      10 * 60 * 1000,
+    ),
+  };
+}
+
+async function acquireSchedulerLease({
+  firestore = admin.firestore(),
+  lockId = CHECK_ALERTS_LEASE_ID,
+  nowMs = Date.now(),
+  leaseDurationMs = DEFAULT_CHECK_ALERTS_LEASE_DURATION_MS,
+  ownerId = randomUUID(),
+}) {
+  const lockRef = firestore.collection("schedulerLeases").doc(lockId);
+  const nowDate = new Date(nowMs);
+  const leaseExpiresAt = new Date(nowMs + leaseDurationMs);
+
+  const acquired = await firestore.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(lockRef);
+    const currentExpiresAt = asDate(snapshot.data()?.leaseExpiresAt);
+    if (currentExpiresAt && currentExpiresAt.getTime() > nowMs) {
+      return false;
+    }
+
+    transaction.set(lockRef, {
+      lockId,
+      leaseOwnerId: ownerId,
+      leaseAcquiredAt: nowDate,
+      leaseExpiresAt,
+      updatedAt: nowDate,
+    });
+    return true;
+  });
+
+  return {
+    acquired,
+    lockId,
+    ownerId,
+    leaseExpiresAt,
+  };
+}
+
+async function releaseSchedulerLease({
+  firestore = admin.firestore(),
+  lockId = CHECK_ALERTS_LEASE_ID,
+  ownerId,
+  releasedAtMs = Date.now(),
+}) {
+  if (!ownerId) {
+    return false;
+  }
+
+  const lockRef = firestore.collection("schedulerLeases").doc(lockId);
+  const releasedAt = new Date(releasedAtMs);
+  return firestore.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(lockRef);
+    if (!snapshot.exists || snapshot.data()?.leaseOwnerId !== ownerId) {
+      return false;
+    }
+
+    transaction.update(lockRef, {
+      leaseExpiresAt: releasedAt,
+      updatedAt: releasedAt,
+    });
+    return true;
+  });
+}
+
+function buildNotificationDedupeKey({
+  alertId,
+  lastCheckedAtValue,
+  intervalMinutes,
+  nowMs = Date.now(),
+}) {
+  const lastCheckedAt = asDate(lastCheckedAtValue);
+  if (lastCheckedAt) {
+    return `${alertId}:${lastCheckedAt.getTime()}`;
+  }
+
+  const safeIntervalMs = Math.max(1, asNumber(intervalMinutes) || 1) * 60 * 1000;
+  const windowStartMs = Math.floor(nowMs / safeIntervalMs) * safeIntervalMs;
+  return `${alertId}:initial:${windowStartMs}`;
+}
+
+async function createIdempotentNotification({
+  firestore = admin.firestore(),
+  dedupeKey,
+  notificationData,
+}) {
+  const notificationRef = firestore.collection("notifications").doc(dedupeKey);
+  const created = await firestore.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(notificationRef);
+    if (snapshot.exists) {
+      return false;
+    }
+
+    transaction.set(notificationRef, {
+      ...notificationData,
+      dedupeKey,
+    });
+    return true;
+  });
+
+  return {
+    created,
+    ref: notificationRef,
   };
 }
 
@@ -798,7 +909,10 @@ async function runAlertEvaluation({
   nowMs = Date.now(),
   fetchRate = fetchEtoroInstrumentRate,
   createTimestamp = () => admin.firestore.FieldValue.serverTimestamp(),
-  addNotification = (data) => admin.firestore().collection("notifications").add(data),
+  createNotificationRecord = (params) => createIdempotentNotification({
+    firestore: admin.firestore(),
+    ...params,
+  }),
   log = logger,
   concurrency = DEFAULT_CHECK_ALERTS_CONCURRENCY,
 }) {
@@ -874,6 +988,7 @@ async function runAlertEvaluation({
       triggerPrice,
       targetPrice,
     );
+    let nextLastTriggeredAt = null;
     const willCreateNotification = shouldCreateNotification(
       conditionMatched,
       alert.lastTriggeredAt,
@@ -881,6 +996,12 @@ async function runAlertEvaluation({
     );
 
     if (willCreateNotification) {
+      const dedupeKey = buildNotificationDedupeKey({
+        alertId,
+        lastCheckedAtValue: alert.lastCheckedAt,
+        intervalMinutes: alert.intervalMinutes,
+        nowMs,
+      });
       const notificationData = {
         userId: asString(alert.userId),
         alertId,
@@ -895,23 +1016,44 @@ async function runAlertEvaluation({
         createdAt: timestamp,
       };
       let notificationRef = null;
+      let notificationCreated = false;
+      let notificationAlreadyExists = false;
 
       try {
-        notificationRef = await addNotification(notificationData);
-        notificationsCreated += 1;
-        await notificationRef.update({
-          status: "sent",
-          errorMessage: null,
+        const creation = await createNotificationRecord({
+          dedupeKey,
+          notificationData,
         });
-        notificationsSent += 1;
+        notificationRef = creation.ref;
+        notificationCreated = creation.created;
+        notificationAlreadyExists = !creation.created;
+        if (notificationAlreadyExists) {
+          log.info("checkAlerts: duplicate notification skipped", { alertId, dedupeKey });
+        }
       } catch (error) {
         notificationsFailed += 1;
-        log.error("checkAlerts: notification delivery update failed", {
+        log.error("checkAlerts: idempotent notification create failed", {
           alertId,
+          dedupeKey,
           errorMessage: error instanceof Error ? error.message : String(error),
         });
+      }
 
-        if (notificationRef) {
+      if (notificationRef && notificationCreated) {
+        notificationsCreated += 1;
+        try {
+          await notificationRef.update({
+            status: "sent",
+            errorMessage: null,
+          });
+          notificationsSent += 1;
+        } catch (error) {
+          notificationsFailed += 1;
+          log.error("checkAlerts: notification delivery update failed", {
+            alertId,
+            errorMessage: error instanceof Error ? error.message : String(error),
+          });
+
           try {
             await notificationRef.update({
               status: "failed",
@@ -927,12 +1069,16 @@ async function runAlertEvaluation({
           }
         }
       }
+
+      if (notificationCreated || notificationAlreadyExists) {
+        nextLastTriggeredAt = timestamp;
+      }
     }
 
     await docSnapshot.ref.update({
       lastCheckedAt: timestamp,
       nextCheckAt,
-      ...(willCreateNotification ? { lastTriggeredAt: timestamp } : {}),
+      ...(nextLastTriggeredAt ? { lastTriggeredAt: nextLastTriggeredAt } : {}),
       updatedAt: timestamp,
     });
     processedAlerts += 1;
@@ -1368,7 +1514,21 @@ exports.checkAlerts = onSchedule(
   async () => {
     const startedAtMs = Date.now();
     const nowDate = new Date(startedAtMs);
-    const { batchSize, concurrency, maxBatches } = getCheckAlertsConfig();
+    const { batchSize, concurrency, maxBatches, leaseDurationMs } = getCheckAlertsConfig();
+    const lease = await acquireSchedulerLease({
+      firestore: admin.firestore(),
+      lockId: CHECK_ALERTS_LEASE_ID,
+      nowMs: startedAtMs,
+      leaseDurationMs,
+    });
+
+    if (!lease.acquired) {
+      logger.info("checkAlerts: skipped due to active scheduler lease", {
+        lockId: CHECK_ALERTS_LEASE_ID,
+      });
+      return;
+    }
+
     let totalDueAlerts = 0;
     let totalProcessedAlerts = 0;
     let totalSkippedAlerts = 0;
@@ -1378,57 +1538,65 @@ exports.checkAlerts = onSchedule(
     let totalNotificationsFailed = 0;
     let cursor = null;
 
-    for (let batchIndex = 0; batchIndex < maxBatches; batchIndex += 1) {
-      const dueQuery = buildDueAlertsQuery({
-        firestore: admin.firestore(),
-        nowDate,
+    try {
+      for (let batchIndex = 0; batchIndex < maxBatches; batchIndex += 1) {
+        const dueQuery = buildDueAlertsQuery({
+          firestore: admin.firestore(),
+          nowDate,
+          batchSize,
+          cursor,
+        });
+        const snapshot = await dueQuery.get();
+        if (snapshot.empty) {
+          break;
+        }
+
+        const evaluation = await runAlertEvaluation({
+          alertDocs: snapshot.docs,
+          nowMs: startedAtMs,
+          concurrency,
+        });
+
+        totalDueAlerts += evaluation.dueAlerts;
+        totalProcessedAlerts += evaluation.processedAlerts;
+        totalSkippedAlerts += evaluation.skippedAlerts;
+        totalFailedAlerts += evaluation.failedAlerts;
+        totalNotificationsCreated += evaluation.notificationsCreated;
+        totalNotificationsSent += evaluation.notificationsSent;
+        totalNotificationsFailed += evaluation.notificationsFailed;
+
+        if (snapshot.docs.length < batchSize) {
+          break;
+        }
+
+        cursor = snapshot.docs[snapshot.docs.length - 1];
+      }
+
+      if (totalDueAlerts === 0) {
+        logger.info("checkAlerts: no active alerts found");
+        return;
+      }
+
+      logger.info("checkAlerts: scheduler run summary", {
+        dueAlerts: totalDueAlerts,
+        processedAlerts: totalProcessedAlerts,
+        skippedAlerts: totalSkippedAlerts,
+        failedAlerts: totalFailedAlerts,
+        notificationsCreated: totalNotificationsCreated,
+        notificationsSent: totalNotificationsSent,
+        notificationsFailed: totalNotificationsFailed,
+        durationMs: Date.now() - startedAtMs,
         batchSize,
-        cursor,
-      });
-      const snapshot = await dueQuery.get();
-      if (snapshot.empty) {
-        break;
-      }
-
-      const evaluation = await runAlertEvaluation({
-        alertDocs: snapshot.docs,
-        nowMs: startedAtMs,
         concurrency,
+        maxBatches,
       });
-
-      totalDueAlerts += evaluation.dueAlerts;
-      totalProcessedAlerts += evaluation.processedAlerts;
-      totalSkippedAlerts += evaluation.skippedAlerts;
-      totalFailedAlerts += evaluation.failedAlerts;
-      totalNotificationsCreated += evaluation.notificationsCreated;
-      totalNotificationsSent += evaluation.notificationsSent;
-      totalNotificationsFailed += evaluation.notificationsFailed;
-
-      if (snapshot.docs.length < batchSize) {
-        break;
-      }
-
-      cursor = snapshot.docs[snapshot.docs.length - 1];
+    } finally {
+      await releaseSchedulerLease({
+        firestore: admin.firestore(),
+        lockId: CHECK_ALERTS_LEASE_ID,
+        ownerId: lease.ownerId,
+      });
     }
-
-    if (totalDueAlerts === 0) {
-      logger.info("checkAlerts: no active alerts found");
-      return;
-    }
-
-    logger.info("checkAlerts: scheduler run summary", {
-      dueAlerts: totalDueAlerts,
-      processedAlerts: totalProcessedAlerts,
-      skippedAlerts: totalSkippedAlerts,
-      failedAlerts: totalFailedAlerts,
-      notificationsCreated: totalNotificationsCreated,
-      notificationsSent: totalNotificationsSent,
-      notificationsFailed: totalNotificationsFailed,
-      durationMs: Date.now() - startedAtMs,
-      batchSize,
-      concurrency,
-      maxBatches,
-    });
   },
 );
 
@@ -1463,6 +1631,10 @@ exports.__test = {
   getHttpStatusFromHttpsCode,
   runAlertEvaluation,
   buildDueAlertsQuery,
+  buildNotificationDedupeKey,
+  createIdempotentNotification,
+  acquireSchedulerLease,
+  releaseSchedulerLease,
   computeNextCheckAtDate,
   getCheckAlertsConfig,
 };

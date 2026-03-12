@@ -312,7 +312,7 @@
   - Priority: `P0`
   - Effort: `M`
 
-- [ ] `STORY-20260311-002` Add scheduler idempotency guard for overlapping runs
+- [x] `STORY-20260311-002` Add scheduler idempotency guard for overlapping runs
   - Type: `ops`
   - Area: `scheduler`
   - Problem: `checkAlerts` can overlap across scheduler invocations; notification creation is not protected by a durable idempotency key/transaction boundary, so concurrent runs can emit duplicate trigger notifications.

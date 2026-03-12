@@ -9,6 +9,47 @@ const { __test } = require("./index");
 const firestoreRulesPath = path.resolve(__dirname, "..", "firestore.rules");
 const firestoreIndexesPath = path.resolve(__dirname, "..", "firestore.indexes.json");
 
+function createInMemoryFirestore() {
+  const store = new Map();
+  const makeRef = (collectionName, id) => ({
+    __key: `${collectionName}/${id}`,
+    id,
+    async update(payload) {
+      const current = store.get(this.__key) || {};
+      store.set(this.__key, { ...current, ...payload });
+    },
+  });
+
+  return {
+    runTransaction(handler) {
+      const transaction = {
+        async get(ref) {
+          const value = store.get(ref.__key);
+          return {
+            exists: value !== undefined,
+            data: () => value,
+          };
+        },
+        set(ref, payload) {
+          store.set(ref.__key, payload);
+        },
+        update(ref, payload) {
+          const current = store.get(ref.__key) || {};
+          store.set(ref.__key, { ...current, ...payload });
+        },
+      };
+      return handler(transaction);
+    },
+    collection(collectionName) {
+      return {
+        doc(id) {
+          return makeRef(collectionName, id);
+        },
+      };
+    },
+  };
+}
+
 test("normalizeInstrument maps eToro payload to internal asset shape", () => {
   const mapped = __test.normalizeInstrument({
     InstrumentID: "1001",
@@ -254,11 +295,14 @@ test("runAlertEvaluation creates and marks notifications as sent for due matchin
     nowMs: now,
     fetchRate: async () => ({ rate: 120 }),
     createTimestamp: () => mockTimestamp,
-    addNotification: async (payload) => {
-      createdNotifications.push(payload);
+    createNotificationRecord: async ({ dedupeKey, notificationData }) => {
+      createdNotifications.push({ dedupeKey, notificationData });
       return {
+        created: true,
+        ref: {
         async update(updatePayload) {
           notificationUpdates.push(updatePayload);
+        },
         },
       };
     },
@@ -275,8 +319,9 @@ test("runAlertEvaluation creates and marks notifications as sent for due matchin
     notificationsFailed: 0,
   });
   assert.equal(createdNotifications.length, 1);
-  assert.equal(createdNotifications[0].status, "pending");
-  assert.equal(createdNotifications[0].triggerPrice, 120);
+  assert.equal(createdNotifications[0].dedupeKey, "alert-1:1773143400000");
+  assert.equal(createdNotifications[0].notificationData.status, "pending");
+  assert.equal(createdNotifications[0].notificationData.triggerPrice, 120);
   assert.deepEqual(notificationUpdates, [{ status: "sent", errorMessage: null }]);
   assert.equal(alertUpdates.length, 1);
   assert.equal(alertUpdates[0].lastCheckedAt, mockTimestamp);
@@ -320,9 +365,12 @@ test("runAlertEvaluation skips duplicate notification when condition remains mat
     nowMs: now,
     fetchRate: async () => ({ rate: 120 }),
     createTimestamp: () => mockTimestamp,
-    addNotification: async (payload) => {
-      createdNotifications.push(payload);
-      return { async update() {} };
+    createNotificationRecord: async ({ dedupeKey, notificationData }) => {
+      createdNotifications.push({ dedupeKey, notificationData });
+      return {
+        created: true,
+        ref: { async update() {} },
+      };
     },
     log: { info() {}, warn() {}, error() {} },
   });
@@ -399,8 +447,9 @@ test("runAlertEvaluation keeps processing other alerts when one rate lookup fail
       return { rate: 120 };
     },
     createTimestamp: () => mockTimestamp,
-    addNotification: async () => ({
-      async update() {},
+    createNotificationRecord: async () => ({
+      created: true,
+      ref: { async update() {} },
     }),
     log: { info() {}, warn() {}, error() {} },
   });
@@ -431,13 +480,130 @@ test("getCheckAlertsConfig reads bounded values from env", () => {
     CHECK_ALERTS_BATCH_SIZE: "250",
     CHECK_ALERTS_CONCURRENCY: "8",
     CHECK_ALERTS_MAX_BATCHES: "4",
+    CHECK_ALERTS_LEASE_DURATION_MS: "120000",
   });
 
   assert.deepEqual(config, {
     batchSize: 250,
     concurrency: 8,
     maxBatches: 4,
+    leaseDurationMs: 120000,
   });
+});
+
+test("buildNotificationDedupeKey uses lastCheckedAt when available", () => {
+  const dedupeKey = __test.buildNotificationDedupeKey({
+    alertId: "alert-1",
+    lastCheckedAtValue: new Date("2026-03-10T11:50:00.000Z"),
+    intervalMinutes: 5,
+    nowMs: Date.UTC(2026, 2, 10, 12, 0, 0),
+  });
+
+  assert.equal(dedupeKey, "alert-1:1773143400000");
+});
+
+test("buildNotificationDedupeKey uses rounded interval window for initial checks", () => {
+  const nowMs = Date.UTC(2026, 2, 10, 12, 4, 59);
+  const dedupeKey = __test.buildNotificationDedupeKey({
+    alertId: "alert-1",
+    lastCheckedAtValue: null,
+    intervalMinutes: 5,
+    nowMs,
+  });
+
+  assert.equal(dedupeKey, "alert-1:initial:1773144000000");
+});
+
+test("runAlertEvaluation keeps notifications idempotent across overlapping runs", async () => {
+  const now = Date.UTC(2026, 2, 10, 12, 0, 0);
+  const dedupeMap = new Set();
+  const createNotificationRecord = async ({ dedupeKey }) => {
+    const created = !dedupeMap.has(dedupeKey);
+    dedupeMap.add(dedupeKey);
+    return {
+      created,
+      ref: { async update() {} },
+    };
+  };
+
+  const makeAlertDoc = () => ({
+    id: "alert-1",
+    data() {
+      return {
+        userId: "user-1",
+        instrumentId: 101,
+        symbol: "BTC",
+        displayName: "BTC breakout",
+        condition: "above",
+        targetPrice: 100,
+        intervalMinutes: 5,
+        lastCheckedAt: new Date(Date.UTC(2026, 2, 10, 11, 50, 0)),
+        lastTriggeredAt: null,
+      };
+    },
+    ref: { async update() {} },
+  });
+
+  const [firstRun, secondRun] = await Promise.all([
+    __test.runAlertEvaluation({
+      alertDocs: [makeAlertDoc()],
+      nowMs: now,
+      fetchRate: async () => ({ rate: 120 }),
+      createTimestamp: () => ({ _type: "serverTimestamp" }),
+      createNotificationRecord,
+      log: { info() {}, warn() {}, error() {} },
+    }),
+    __test.runAlertEvaluation({
+      alertDocs: [makeAlertDoc()],
+      nowMs: now,
+      fetchRate: async () => ({ rate: 120 }),
+      createTimestamp: () => ({ _type: "serverTimestamp" }),
+      createNotificationRecord,
+      log: { info() {}, warn() {}, error() {} },
+    }),
+  ]);
+
+  assert.equal(firstRun.notificationsCreated + secondRun.notificationsCreated, 1);
+});
+
+test("scheduler lease blocks overlap until released", async () => {
+  const firestore = createInMemoryFirestore();
+  const nowMs = Date.UTC(2026, 2, 10, 12, 0, 0);
+
+  const first = await __test.acquireSchedulerLease({
+    firestore,
+    lockId: "checkAlerts",
+    nowMs,
+    leaseDurationMs: 60_000,
+    ownerId: "worker-a",
+  });
+  const second = await __test.acquireSchedulerLease({
+    firestore,
+    lockId: "checkAlerts",
+    nowMs: nowMs + 1_000,
+    leaseDurationMs: 60_000,
+    ownerId: "worker-b",
+  });
+
+  assert.equal(first.acquired, true);
+  assert.equal(second.acquired, false);
+
+  const released = await __test.releaseSchedulerLease({
+    firestore,
+    lockId: "checkAlerts",
+    ownerId: "worker-a",
+    releasedAtMs: nowMs + 2_000,
+  });
+  const third = await __test.acquireSchedulerLease({
+    firestore,
+    lockId: "checkAlerts",
+    nowMs: nowMs + 3_000,
+    leaseDurationMs: 60_000,
+    ownerId: "worker-c",
+  });
+
+  assert.equal(released, true);
+  assert.equal(third.acquired, true);
 });
 
 test("toRateLimitDocId creates deterministic distributed key", () => {
