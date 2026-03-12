@@ -25,6 +25,7 @@ service cloud.firestore {
         'isActive',
         'intervalMinutes',
         'lastCheckedAt',
+        'nextCheckAt',
         'lastTriggeredAt',
         'createdAt',
         'updatedAt'
@@ -42,6 +43,7 @@ service cloud.firestore {
         'isActive',
         'intervalMinutes',
         'lastCheckedAt',
+        'nextCheckAt',
         'lastTriggeredAt',
         'createdAt',
         'updatedAt'
@@ -62,6 +64,7 @@ service cloud.firestore {
         && data.intervalMinutes > 0
         && data.intervalMinutes <= 1440
         && (data.lastCheckedAt == null || data.lastCheckedAt is timestamp)
+        && data.nextCheckAt is timestamp
         && (data.lastTriggeredAt == null || data.lastTriggeredAt is timestamp)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;

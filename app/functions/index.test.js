@@ -1,8 +1,13 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const { HttpsError } = require("firebase-functions/v2/https");
 
 const { __test } = require("./index");
+
+const firestoreRulesPath = path.resolve(__dirname, "..", "firestore.rules");
+const firestoreIndexesPath = path.resolve(__dirname, "..", "firestore.indexes.json");
 
 test("normalizeInstrument maps eToro payload to internal asset shape", () => {
   const mapped = __test.normalizeInstrument({
@@ -465,6 +470,24 @@ test("encodePageToken and decodePageToken roundtrip values", () => {
 test("decodePageToken returns null for malformed values", () => {
   assert.equal(__test.decodePageToken("invalid"), null);
   assert.equal(__test.decodePageToken(__test.encodePageToken({ bad: true })), null);
+});
+
+test("firestore.rules validates nextCheckAt in alerts payload", () => {
+  const rulesSource = fs.readFileSync(firestoreRulesPath, "utf8");
+
+  assert.match(rulesSource, /'nextCheckAt'/);
+  assert.match(rulesSource, /data\.nextCheckAt is timestamp/);
+});
+
+test("firestore indexes include due-alert and alert pagination composites", () => {
+  const indexes = JSON.parse(fs.readFileSync(firestoreIndexesPath, "utf8"));
+  const alertIndexes = indexes.indexes.filter((entry) => entry.collectionGroup === "alerts");
+  const signatures = alertIndexes.map((entry) =>
+    entry.fields.map((field) => `${field.fieldPath}:${field.mode}`).join("|"),
+  );
+
+  assert.ok(signatures.includes("isActive:ASCENDING|nextCheckAt:ASCENDING"));
+  assert.ok(signatures.includes("userId:ASCENDING|createdAt:DESCENDING|__name__:DESCENDING"));
 });
 
 test("enforceDistributedRateLimit writes counter when under limit", async () => {

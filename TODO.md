@@ -298,7 +298,7 @@
 
 ## Architecture + Engineering Audit (2026-03-11)
 
-- [ ] `STORY-20260311-001` Align Firestore rules and indexes with due-alert scheduling
+- [x] `STORY-20260311-001` Align Firestore rules and indexes with due-alert scheduling
   - Type: `architecture`
   - Area: `infra`
   - Problem: Alert writes now include `nextCheckAt`, and scheduler/list queries depend on `nextCheckAt` and `createdAt` ordering, but current `firestore.rules` and `firestore.indexes.json` do not fully match these runtime query/write contracts.
