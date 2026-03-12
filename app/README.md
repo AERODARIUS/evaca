@@ -122,6 +122,20 @@ cd app
 npm run test
 ```
 
+Dependency vulnerability gate (PR/merge CI):
+
+```bash
+cd app
+npm run security:audit:ci
+```
+
+Monthly dependency report (scheduled workflow/manual run):
+
+```bash
+cd app
+npm run security:audit:report
+```
+
 E2E (Playwright):
 
 ```bash
@@ -152,3 +166,24 @@ firebase deploy --only functions,hosting,firestore:rules
 - Claves eToro se leen desde Secret Manager.
 - El frontend no llama eToro directamente; usa Functions.
 - `checkAlerts` marca una alerta como `triggered` al primer match (one-shot). Si querés alertas repetibles, se cambia a `active` tras notificar.
+
+## Dependency patch protocol
+
+- Severity SLA:
+  - `critical`: patch or mitigate within 24 hours.
+  - `high`: patch or mitigate within 72 hours.
+  - `moderate`: patch in next monthly maintenance window.
+  - `low`: backlog unless exploitability changes.
+- Ownership:
+  - `app/functions` vulnerabilities: backend owner/on-call.
+  - `app/web` vulnerabilities: frontend owner/on-call.
+  - shared/root dependencies: release owner for the current sprint.
+- Emergency patch flow:
+  1. Create hotfix branch with minimal dependency updates (`npm update`/pin exact safe version).
+  2. Run `npm run security:audit:ci`, `npm run functions:test`, and `npm run test`.
+  3. Deploy to preview first; verify auth, alert create/update, scheduler logs.
+  4. Promote to production and monitor error budget/latency for 30 minutes.
+- Rollback procedure:
+  1. Revert dependency bump commit(s) or redeploy last known-good build artifact.
+  2. Re-run smoke tests and confirm scheduler + callable endpoints recover.
+  3. Open follow-up incident task with root cause and safer upgrade plan.

@@ -25,6 +25,8 @@
     "functions:deploy": "npm run functions:lint && npm run functions:build && firebase deploy --only functions",
     "deploy": "npm run functions:deploy && npm run web:deploy",
     "functions:test": "npm run test -w functions",
+    "security:audit:ci": "npm audit --audit-level=high --workspaces --include-workspace-root",
+    "security:audit:report": "npm audit --json --workspaces --include-workspace-root",
     "deploy:checklist": "node scripts/deploymentChecklist.js"
   }
 }

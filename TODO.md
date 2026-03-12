@@ -340,7 +340,7 @@
   - Priority: `P1`
   - Effort: `M`
 
-- [ ] `STORY-20260311-004` Add dependency vulnerability scanning and patch cadence
+- [x] `STORY-20260311-004` Add dependency vulnerability scanning and patch cadence
   - Type: `security`
   - Area: `infra`
   - Problem: CI does not enforce dependency vulnerability scanning for workspace and functions packages.
