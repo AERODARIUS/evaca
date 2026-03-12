@@ -45,7 +45,7 @@ Campos principales:
 1. Proyecto Firebase creado.
 2. Auth (Email/Password) habilitado.
 3. Firestore habilitado.
-4. Node.js 20.
+4. Node.js 22.
 5. Claves eToro (api key + user key).
 6. Opcional: extensión `Trigger Email` de Firebase para procesar docs en `mail`.
 

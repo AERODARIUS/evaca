@@ -354,7 +354,7 @@
   - Priority: `P2`
   - Effort: `S`
 
-- [ ] `STORY-20260311-005` Upgrade runtime from Node.js 20 before EOL cutoff
+- [x] `STORY-20260311-005` Upgrade runtime from Node.js 20 before EOL cutoff
   - Type: `maintenance`
   - Area: `infra`
   - Problem: Node.js 20 reaches end-of-life on `2026-04-30` (obsoleta) and retirement on `2026-10-30`, while current runtime references still target Node 20.
