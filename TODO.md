@@ -326,7 +326,7 @@
   - Priority: `P1`
   - Effort: `L`
 
-- [ ] `STORY-20260311-003` Add Firestore rules security regression tests
+- [x] `STORY-20260311-003` Add Firestore rules security regression tests
   - Type: `security`
   - Area: `testing`
   - Problem: There are no Firestore security-rules emulator tests validating tenant isolation and write constraints for `alerts` and `notifications`.

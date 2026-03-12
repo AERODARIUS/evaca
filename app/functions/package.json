@@ -9,6 +9,7 @@
     "lint": "node scripts/lint.js",
     "build": "echo 'No build step required'",
     "test": "node --test",
+    "test:rules": "node --test firestore.rules.test.js",
     "test:coverage": "node scripts/testCoverage.js"
   },
   "dependencies": {
