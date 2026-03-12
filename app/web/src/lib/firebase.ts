@@ -29,10 +29,14 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 
 const appCheckSiteKey = import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY;
+const appCheckDebugToken = import.meta.env.VITE_FIREBASE_APPCHECK_DEBUG_TOKEN;
+
 if (typeof window !== "undefined") {
   if (import.meta.env.DEV && window.location.hostname === "localhost") {
     // Local development can use the App Check debug flow.
-    (self as { FIREBASE_APPCHECK_DEBUG_TOKEN?: boolean }).FIREBASE_APPCHECK_DEBUG_TOKEN = true;
+    const token = typeof appCheckDebugToken === "string" ? appCheckDebugToken.trim() : "";
+    (self as { FIREBASE_APPCHECK_DEBUG_TOKEN?: string | boolean }).FIREBASE_APPCHECK_DEBUG_TOKEN =
+      token.length > 0 ? token : true;
   }
 
   if (typeof appCheckSiteKey === "string" && appCheckSiteKey.trim() !== "") {

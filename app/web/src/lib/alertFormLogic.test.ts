@@ -101,8 +101,32 @@ describe('asset search deterministic states', () => {
   });
 
   it('maps callable failures to deterministic error guidance', () => {
-    expect(getSearchErrorMessage({ code: 'functions/unauthenticated' }, 'btc')).toBe(
+    expect(
+      getSearchErrorMessage(
+        {
+          code: 'functions/unauthenticated',
+          details: { errorCode: 'AUTH_REQUIRED' },
+        },
+        'btc',
+      ),
+    ).toBe(
       'Your session expired. Sign in again and retry the search.',
+    );
+
+    expect(
+      getSearchErrorMessage(
+        {
+          code: 'functions/unauthenticated',
+          details: { errorCode: 'APP_CHECK_REQUIRED' },
+        },
+        'btc',
+      ),
+    ).toBe(
+      'Search is blocked by Firebase App Check. Verify site key, allowed domains, and App Check config.',
+    );
+
+    expect(getSearchErrorMessage({ code: 'functions/unauthenticated' }, 'btc')).toBe(
+      'Authentication is required to search assets. Sign in and try again.',
     );
 
     expect(getSearchErrorMessage({ code: 'functions/failed-precondition' }, 'btc')).toBe(

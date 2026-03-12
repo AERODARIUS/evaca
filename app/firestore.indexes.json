@@ -47,6 +47,10 @@
         {
           "fieldPath": "nextCheckAt",
           "mode": "ASCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "mode": "ASCENDING"
         }
       ]
     },

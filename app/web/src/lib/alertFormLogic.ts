@@ -5,6 +5,9 @@ export type SearchState = 'idle' | 'loading' | 'results' | 'empty' | 'error';
 interface CallableErrorLike {
   code?: string;
   message?: string;
+  details?: {
+    errorCode?: string;
+  };
 }
 
 export interface ValidationErrors {
@@ -141,8 +144,16 @@ export function getSearchErrorMessage(error: unknown, searchText: string): strin
   switch (callableError.code) {
     case 'functions/invalid-argument':
       return 'Enter a symbol or asset name before searching (for example: XRP, BTC, AAPL).';
-    case 'functions/unauthenticated':
-      return 'Your session expired. Sign in again and retry the search.';
+    case 'functions/unauthenticated': {
+      const detailCode = callableError.details?.errorCode;
+      if (detailCode === 'APP_CHECK_REQUIRED') {
+        return 'Search is blocked by Firebase App Check. Verify site key, allowed domains, and App Check config.';
+      }
+      if (detailCode === 'AUTH_REQUIRED') {
+        return 'Your session expired. Sign in again and retry the search.';
+      }
+      return 'Authentication is required to search assets. Sign in and try again.';
+    }
     case 'functions/permission-denied':
       return 'Search is currently blocked for this account. Check your Firebase/eToro setup.';
     case 'functions/not-found':

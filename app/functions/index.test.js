@@ -52,7 +52,7 @@ function createInMemoryFirestore() {
 
 test("normalizeInstrument maps eToro payload to internal asset shape", () => {
   const mapped = __test.normalizeInstrument({
-    InstrumentID: "1001",
+    InstrumentId: "1001",
     InternalSymbolFull: "BTC",
     displayname: "Bitcoin",
   });
@@ -61,6 +61,30 @@ test("normalizeInstrument maps eToro payload to internal asset shape", () => {
     instrumentId: 1001,
     symbol: "BTC",
     displayName: "Bitcoin",
+  });
+});
+
+test("extractInstrumentId supports InstrumentId casing variants", () => {
+  assert.equal(__test.extractInstrumentId({ InstrumentId: "1007" }), 1007);
+  assert.equal(__test.extractInstrumentId({ InstrumentID: "1008" }), 1008);
+  assert.equal(__test.extractInstrumentId({ instrumentId: "1009" }), 1009);
+});
+
+test("normalizeInstrument unwraps nested instrument envelope", () => {
+  const mapped = __test.normalizeInstrument({
+    item: {
+      instrument: {
+        InstrumentId: "1005",
+        InternalSymbolFull: "XRP",
+        displayname: "Ripple",
+      },
+    },
+  });
+
+  assert.deepEqual(mapped, {
+    instrumentId: 1005,
+    symbol: "XRP",
+    displayName: "Ripple",
   });
 });
 
@@ -96,6 +120,17 @@ test("extractItems supports nested eToro response containers", () => {
 
   assert.equal(items.length, 1);
   assert.equal(items[0].instrumentId, 3003);
+});
+
+test("extractItems handles single instrument payload with InstrumentId casing", () => {
+  const items = __test.extractItems({
+    InstrumentId: "3004",
+    InternalSymbolFull: "XRP",
+    displayname: "Ripple",
+  });
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0].InstrumentId, "3004");
 });
 
 test("isSearchMatch supports compact matches for ticker-like input", () => {
@@ -159,6 +194,12 @@ test("buildSearchCandidates prefers ticker lookup for ticker-like search", () =>
       withPagination: false,
       fields: "instrumentId,internalSymbolFull,displayname",
     },
+    {
+      kind: "searchText",
+      queryValue: "btc",
+      withPagination: true,
+      fields: "instrumentId,internalSymbolFull,displayname",
+    },
   ]);
 });
 
@@ -170,6 +211,7 @@ test("buildSearchCandidates uses text search for non-ticker input", () => {
       kind: "searchText",
       queryValue: "bitcoin us dollar",
       withPagination: true,
+      fields: "instrumentId,internalSymbolFull,displayname",
     },
   ]);
 });
@@ -652,7 +694,7 @@ test("firestore indexes include due-alert and alert pagination composites", () =
     entry.fields.map((field) => `${field.fieldPath}:${field.mode}`).join("|"),
   );
 
-  assert.ok(signatures.includes("isActive:ASCENDING|nextCheckAt:ASCENDING"));
+  assert.ok(signatures.includes("isActive:ASCENDING|nextCheckAt:ASCENDING|__name__:ASCENDING"));
   assert.ok(signatures.includes("userId:ASCENDING|createdAt:DESCENDING|__name__:DESCENDING"));
 });
 

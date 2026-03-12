@@ -19,6 +19,7 @@ const ETORO_RETRY_BASE_DELAY_MS = 250;
 const ETORO_RETRY_JITTER_MS = 120;
 const ETORO_SEARCH_PAGE_SIZE = 50;
 const ETORO_SEARCH_MAX_PAGES = 2;
+const ETORO_INSTRUMENTS_BATCH_SIZE = 50;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX_REQUESTS = 30;
 const RATE_LIMIT_COLLECTION = "_rateLimits";
@@ -67,6 +68,7 @@ function extractItems(payload) {
   if (payload && typeof payload === "object") {
     if (
       asNumber(payload.instrumentId) !== null ||
+      asNumber(payload.InstrumentId) !== null ||
       asNumber(payload.InstrumentID) !== null ||
       asNumber(payload.instrumentID) !== null
     ) {
@@ -115,8 +117,32 @@ function normalizeInstrument(item) {
     return null;
   }
 
+  const nestedCandidates = [
+    item.instrument,
+    item.Instrument,
+    item.item,
+    item.Item,
+    item.asset,
+    item.Asset,
+    item.value,
+    item.Value,
+    item.data,
+    item.Data,
+    item.result,
+    item.Result,
+  ];
+  for (const nested of nestedCandidates) {
+    if (nested && typeof nested === "object") {
+      const normalizedNested = normalizeInstrument(nested);
+      if (normalizedNested) {
+        return normalizedNested;
+      }
+    }
+  }
+
   const instrumentId =
     asNumber(item.instrumentId) ??
+    asNumber(item.InstrumentId) ??
     asNumber(item.InstrumentID) ??
     asNumber(item.instrumentID) ??
     asNumber(item.instrument_id) ??
@@ -170,6 +196,47 @@ function normalizeInstrumentRate(item) {
     ...normalized,
     rate,
   };
+}
+
+function extractInstrumentId(item) {
+  return (
+    asNumber(item?.instrumentId) ??
+    asNumber(item?.InstrumentId) ??
+    asNumber(item?.InstrumentID) ??
+    asNumber(item?.instrumentID) ??
+    asNumber(item?.id) ??
+    asNumber(item?.ID)
+  );
+}
+
+async function fetchEtoroInstrumentsByIds(instrumentIds, apiKey, userKey) {
+  const ids = Array.from(
+    new Set(
+      instrumentIds
+        .map((id) => asNumber(id))
+        .filter((id) => id !== null && id > 0),
+    ),
+  );
+  const rawItems = [];
+
+  for (let index = 0; index < ids.length; index += ETORO_INSTRUMENTS_BATCH_SIZE) {
+    const batchIds = ids.slice(index, index + ETORO_INSTRUMENTS_BATCH_SIZE);
+    if (batchIds.length === 0) {
+      continue;
+    }
+    const query = new URLSearchParams({
+      instrumentIds: batchIds.join(","),
+    });
+    const queryString = toEtoroQueryString(query, ["instrumentIds"]);
+    const payload = await callEtoro(
+      `/market-data/instruments?${queryString}`,
+      apiKey,
+      userKey,
+    );
+    rawItems.push(...extractItems(payload));
+  }
+
+  return rawItems;
 }
 
 function extractPrice(item) {
@@ -372,6 +439,7 @@ function buildSearchCandidates(searchText) {
   const clean = asString(searchText);
   const upper = clean.toUpperCase();
   const isTickerLike = /^[A-Za-z0-9._-]{1,16}$/.test(clean);
+  // Don't remove below line, we need this list of fields in the search results to properly normalize the instruments
   const fields = "instrumentId,internalSymbolFull,displayname";
 
   if (isTickerLike) {
@@ -382,6 +450,12 @@ function buildSearchCandidates(searchText) {
         withPagination: false,
         fields,
       },
+      {
+        kind: "searchText",
+        queryValue: clean,
+        withPagination: true,
+        fields,
+      },
     ];
   }
 
@@ -390,6 +464,7 @@ function buildSearchCandidates(searchText) {
       kind: "searchText",
       queryValue: clean,
       withPagination: true,
+      fields,
     },
   ];
 }
@@ -462,6 +537,20 @@ function summarizePayload(payload) {
   }
 
   return { type: typeof payload };
+}
+
+function toEtoroQueryString(query, csvKeys = []) {
+  let queryString = query.toString();
+  for (const key of csvKeys) {
+    const value = query.get(key);
+    if (typeof value !== "string" || !value.includes(",")) {
+      continue;
+    }
+    const encodedPair = `${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
+    const rawPair = `${encodeURIComponent(key)}=${value}`;
+    queryString = queryString.replace(encodedPair, rawPair);
+  }
+  return queryString;
 }
 
 function requireSecretValue(secret, label) {
@@ -1219,6 +1308,7 @@ async function searchEtoroAssets(searchText) {
       if (candidate.fields) {
         query.set("fields", candidate.fields);
       }
+      const queryString = toEtoroQueryString(query, ["fields"]);
 
       logger.info("eToro search request", {
         searchText: trimmedSearchText,
@@ -1226,12 +1316,26 @@ async function searchEtoroAssets(searchText) {
         pageNumber,
       });
 
+      logger.info("QUERY STRING", {
+        query: queryString,
+      });
+
       const payload = await callEtoro(
-        `/market-data/search?${query.toString()}`,
+        `/market-data/search?${queryString}`,
         apiKey,
         userKey,
       );
       const pageItems = extractItems(payload);
+      logger.info("eToro search page processed", {
+        mode: candidate.kind,
+        pageNumber,
+        payloadSummary: summarizePayload(payload),
+        pageItemsCount: pageItems.length,
+        firstPageItemKeys:
+          pageItems.length > 0 && pageItems[0] && typeof pageItems[0] === "object"
+            ? Object.keys(pageItems[0]).slice(0, 20)
+            : [],
+      });
       rawItems.push(...pageItems);
 
       if (pageItems.length < ETORO_SEARCH_PAGE_SIZE) {
@@ -1243,18 +1347,46 @@ async function searchEtoroAssets(searchText) {
   const dedupedByInstrumentId = Array.from(
     new Map(
       rawItems.map((item) => {
-        const id =
-          asNumber(item?.instrumentId) ??
-          asNumber(item?.InstrumentID) ??
-          asNumber(item?.instrumentID) ??
-          asNumber(item?.id);
+        const id = extractInstrumentId(item);
         return [id ?? randomUUID(), item];
       }),
     ).values(),
   );
-  const normalizedItems = dedupedByInstrumentId
+  let normalizedItems = dedupedByInstrumentId
     .map(normalizeInstrument)
     .filter((item) => item !== null);
+
+  if (normalizedItems.length === 0) {
+    const rawInstrumentIds = dedupedByInstrumentId
+      .map((item) => extractInstrumentId(item))
+      .filter((id) => id !== null && id > 0);
+    if (rawInstrumentIds.length > 0) {
+      try {
+        const metadataItems = await fetchEtoroInstrumentsByIds(
+          rawInstrumentIds,
+          apiKey,
+          userKey,
+        );
+        normalizedItems = Array.from(
+          new Map(
+            metadataItems
+              .map(normalizeInstrument)
+              .filter((item) => item !== null)
+              .map((item) => [item.instrumentId, item]),
+          ).values(),
+        );
+        logger.info("eToro search fallback metadata hydration", {
+          requestedInstrumentIds: rawInstrumentIds.length,
+          metadataRawItems: metadataItems.length,
+          metadataNormalizedItems: normalizedItems.length,
+        });
+      } catch (error) {
+        logger.warn("eToro search fallback metadata hydration failed", {
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
 
   const rankedItems = rankSearchResults(normalizedItems, trimmedSearchText);
   const items = rankedItems.filter((item) =>
@@ -1266,6 +1398,19 @@ async function searchEtoroAssets(searchText) {
     totalDedupedItems: dedupedByInstrumentId.length,
     totalNormalizedItems: normalizedItems.length,
     totalMatchedItems: items.length,
+    firstRawItem:
+      rawItems.length > 0 && rawItems[0] && typeof rawItems[0] === "object"
+        ? {
+            keys: Object.keys(rawItems[0]).slice(0, 20),
+            instrumentId: extractInstrumentId(rawItems[0]),
+            symbol:
+              asString(rawItems[0].internalSymbolFull) ||
+              asString(rawItems[0].InternalSymbolFull) ||
+              asString(rawItems[0].symbol) ||
+              asString(rawItems[0].Symbol) ||
+              "",
+          }
+        : null,
   });
 
   return { items };
@@ -1290,10 +1435,7 @@ async function fetchEtoroInstrumentRate(instrumentIdValue) {
 
   const items = extractItems(payload);
   const exactItem = items.find((item) => {
-    const itemId =
-      asNumber(item?.instrumentId) ??
-      asNumber(item?.InstrumentID) ??
-      asNumber(item?.instrumentID);
+    const itemId = extractInstrumentId(item);
     return itemId === instrumentId;
   });
 
@@ -1604,6 +1746,7 @@ exports.__test = {
   extractItems,
   normalizeInstrument,
   normalizeInstrumentRate,
+  extractInstrumentId,
   extractPrice,
   asNumber,
   asString,

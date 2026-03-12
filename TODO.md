@@ -236,7 +236,7 @@
     - README function inventory matches exported functions in code.
     - Planned-but-missing capabilities are explicitly marked as backlog items.
     - Local setup/deploy/testing instructions are verified end-to-end.
-  - Dependencies: `STORY-20260311-001`, `STORY-20260311-002`, `STORY-20260311-003`, `STORY-20260311-004`
+  - Dependencies: `STORY-20260311-001`, `STORY-20260311-002`, `STORY-20260311-003`, `STORY-20260311-004`, `STORY-20260312-001`, `STORY-20260312-002`, `STORY-20260312-003`
   - Priority: `P3`
   - Effort: `S`
 
@@ -326,18 +326,18 @@
   - Priority: `P1`
   - Effort: `L`
 
-- [x] `STORY-20260311-003` Add Firestore rules security regression tests
+- [ ] `STORY-20260311-003` Add Firestore rules security regression tests
   - Type: `security`
   - Area: `testing`
-  - Problem: There are no Firestore security-rules emulator tests validating tenant isolation and write constraints for `alerts` and `notifications`.
-  - Impact: Rule regressions can silently expose cross-user data or break critical writes until discovered in production.
-  - Proposed change: Add `@firebase/rules-unit-testing` coverage for owner-only reads/writes, immutable field constraints, and blocked notification client writes; run tests in CI.
+  - Problem: Current `app/functions/firestore.rules.test.js` assertions are static regex checks against source text, so rule behavior is not validated in the Firestore emulator.
+  - Impact: Critical authorization regressions can pass CI while runtime rules are broken or bypassable, increasing tenant-isolation risk.
+  - Proposed change: Replace static rule-shape checks with emulator-backed `@firebase/rules-unit-testing` behavioral tests for owner/non-owner read/write paths, immutable fields, and blocked client writes.
   - Acceptance criteria:
-    - Tests assert users cannot read/write another user’s alerts or notifications.
-    - Tests assert `alerts.createdAt` immutability and userId ownership constraints on update.
-    - CI fails when security-rules tests fail.
+    - Emulator tests assert users cannot read/write another user’s alerts or notifications.
+    - Emulator tests assert `alerts.createdAt` immutability, userId ownership constraints, and allowed owner updates.
+    - CI fails when emulator rules tests fail (not only regex/source assertions).
   - Dependencies: `STORY-20260311-001`
-  - Priority: `P1`
+  - Priority: `P0`
   - Effort: `M`
 
 - [x] `STORY-20260311-004` Add dependency vulnerability scanning and patch cadence
@@ -368,23 +368,81 @@
   - Priority: `P1`
   - Effort: `M`
 
+## Architecture + Engineering Audit (2026-03-12)
+
+- [ ] `STORY-20260312-001` Add TTL lifecycle controls for operational collections
+  - Type: `ops`
+  - Area: `infra`
+  - Problem: Backend writes `_rateLimits.expiresAt` and scheduler lease documents, but there is no explicit TTL policy or cleanup workflow ensuring these high-churn collections are pruned.
+  - Impact: Unbounded collection growth increases Firestore cost, degrades query performance over time, and reduces signal quality during incident analysis.
+  - Proposed change: Enable/document Firestore TTL policies (or scheduled cleanup) for `_rateLimits` and `schedulerLeases`, add runbook verification, and monitor document volume.
+  - Acceptance criteria:
+    - `_rateLimits` documents are automatically removed after expiry via configured TTL or equivalent scheduled cleanup.
+    - `schedulerLeases` stale documents are bounded by TTL/cleanup policy with documented retention.
+    - Ops docs include how to verify TTL status and alert on abnormal collection growth.
+  - Dependencies: `none`
+  - Priority: `P1`
+  - Effort: `S`
+
+- [ ] `STORY-20260312-002` Add resilient UI error handling for alert workflows
+  - Type: `quality`
+  - Area: `frontend`
+  - Problem: `loadAlerts`, delete, and toggle flows can fail without consistent user-facing feedback or recoverable UI state, causing silent failure paths.
+  - Impact: Users can lose trust in alert operations, retry unpredictably, and trigger duplicate actions when backend calls fail transiently.
+  - Proposed change: Add shared async operation/error handling for alert load/mutate actions with surfaced error banners, retry affordances, and disabled-state guards.
+  - Acceptance criteria:
+    - Load/create/edit/delete/toggle failures always display actionable error feedback in the UI.
+    - Failed operations keep UI state deterministic (no stale spinners, no silent drops).
+    - Component/integration tests cover representative failure paths and retry behavior.
+  - Dependencies: `none`
+  - Priority: `P2`
+  - Effort: `M`
+
+- [ ] `STORY-20260312-003` Consolidate duplicate CI workflow sources
+  - Type: `tech-debt`
+  - Area: `infra`
+  - Problem: The repository contains active workflows in `/.github/workflows` and outdated duplicates in `app/.github/workflows`, creating drift-prone CI definitions.
+  - Impact: Engineers can update the wrong workflow files, leading to false assumptions about enforced checks and deployment behavior.
+  - Proposed change: Keep one canonical workflow location, remove or clearly deprecate duplicate files, and document the CI ownership/source-of-truth path.
+  - Acceptance criteria:
+    - Only one maintained set of workflow files remains for deploy/PR pipelines.
+    - Workflow docs/readme identify the canonical path and expected quality/security gates.
+    - PR diff review makes CI changes unambiguous (no duplicate YAML drift risk).
+  - Dependencies: `none`
+  - Priority: `P2`
+  - Effort: `S`
+
+- [ ] `STORY-20260312-004` Add Remote Config log-scope feature flag
+  - Type: `ops`
+  - Area: `frontend`
+  - Problem: Logging verbosity is not centrally controllable at runtime, so enabling detailed logs for troubleshooting requires code/config changes and can leak noisy logs when left on.
+  - Impact: Slower incident triage and higher observability noise/cost, with avoidable risk of verbose diagnostics persisting in production.
+  - Proposed change: Add a Firebase Remote Config-backed flag to enable/disable scoped verbose logs and route app logging through a shared logger utility that respects the flag.
+  - Acceptance criteria:
+    - A Remote Config key (for example `logs_verbose_enabled`) toggles verbose logs on/off without redeploy.
+    - All targeted scoped logs flow through a shared logger wrapper with safe defaults (`off` in production unless explicitly enabled).
+    - Tests verify logger behavior for flag enabled and disabled states.
+  - Dependencies: `none`
+  - Priority: `P2`
+  - Effort: `S`
+
 ### Recommended execution order
-1. `STORY-20260311-001`
-2. `STORY-20260311-002`
-3. `STORY-20260311-003`
-4. `STORY-20260311-005`
-5. `STORY-20260311-004`
+1. `STORY-20260311-003`
+2. `STORY-20260312-001`
+3. `STORY-20260312-003`
+4. `STORY-20260312-004`
+5. `STORY-20260312-002`
 6. `STORY-20260309-005`
 
 ### Story dependencies
 
-- `STORY-20260311-001` has no hard prerequisite and should run first because it removes immediate runtime failures in alert write/query paths.
-- `STORY-20260311-002` depends on scheduler/query contract stability from `STORY-20260311-001`.
-- `STORY-20260311-003` should run after `STORY-20260311-001` so rule/query test fixtures match the finalized alert schema.
-- `STORY-20260311-005` should run before broader dependency/security hardening so CI, Functions, and tooling all evaluate on the current supported Node runtime.
-- `STORY-20260311-004` is independent and can run in parallel, but stays after P0/P1 runtime risk reducers.
+- `STORY-20260311-003` is now the top open item because security rule enforcement is not behavior-tested in emulator and represents the highest latent risk.
+- `STORY-20260312-001` is independent and follows security testing to reduce long-term operational/cost risk from high-churn collections.
+- `STORY-20260312-003` is independent and can be executed early to eliminate CI definition drift before future pipeline changes.
+- `STORY-20260312-004` is independent and best done before broader UI quality cleanup so debug instrumentation can be controlled during remediation/testing work.
+- `STORY-20260312-002` is independent but sequenced after infra/security controls because it is user-impact quality hardening, not direct risk containment.
 - `SOTRY-14` depends on `SOTRY-10` to `SOTRY-13` plus `STORY-20260309-003` for stable component seams.
 - `SOTRY-15` depends on `SOTRY-14` results.
 - `SOTRY-16` depends on UI implementation from `SOTRY-10` to `SOTRY-13`.
 - `SOTRY-17` depends on `SOTRY-14` and `SOTRY-16`.
-- `STORY-20260309-005` remains a final documentation sync step after active architecture/security changes land.
+- `STORY-20260309-005` remains a final documentation sync step after open architecture/security/CI stories land.
