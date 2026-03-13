@@ -370,7 +370,7 @@
 
 ## Architecture + Engineering Audit (2026-03-12)
 
-- [ ] `STORY-20260312-001` Add TTL lifecycle controls for operational collections
+- [x] `STORY-20260312-001` Add TTL lifecycle controls for operational collections
   - Type: `ops`
   - Area: `infra`
   - Problem: Backend writes `_rateLimits.expiresAt` and scheduler lease documents, but there is no explicit TTL policy or cleanup workflow ensuring these high-churn collections are pruned.

@@ -648,6 +648,85 @@ test("scheduler lease blocks overlap until released", async () => {
   assert.equal(third.acquired, true);
 });
 
+test("deleteExpiredCollectionDocs removes expired docs in bounded batches", async () => {
+  const deletions = [];
+  const snapshots = [
+    {
+      empty: false,
+      docs: [
+        { ref: { async delete() { deletions.push("d1"); } } },
+        { ref: { async delete() { deletions.push("d2"); } } },
+      ],
+    },
+    {
+      empty: false,
+      docs: [
+        { ref: { async delete() { deletions.push("d3"); } } },
+      ],
+    },
+  ];
+  let callCount = 0;
+  const firestore = {
+    collection() {
+      return {
+        where() {
+          return {
+            limit() {
+              return {
+                async get() {
+                  const result = snapshots[callCount];
+                  callCount += 1;
+                  return result || { empty: true, docs: [] };
+                },
+              };
+            },
+          };
+        },
+      };
+    },
+  };
+
+  const deletedCount = await __test.deleteExpiredCollectionDocs({
+    firestore,
+    collectionName: "_rateLimits",
+    timestampField: "expiresAt",
+    cutoffDate: new Date(Date.UTC(2026, 2, 10, 12, 0, 0)),
+    batchSize: 2,
+    maxBatches: 10,
+  });
+
+  assert.equal(deletedCount, 3);
+  assert.deepEqual(deletions, ["d1", "d2", "d3"]);
+});
+
+test("cleanupOperationalCollections prunes rate limits and stale scheduler leases", async () => {
+  const calls = [];
+  const summary = await __test.cleanupOperationalCollections({
+    nowMs: Date.UTC(2026, 2, 10, 12, 0, 0),
+    schedulerLeaseRetentionMs: 60 * 60 * 1000,
+    cleanupDocs: async (params) => {
+      calls.push(params);
+      return params.collectionName === "_rateLimits" ? 4 : 2;
+    },
+    log: { info() {}, warn() {}, error() {} },
+  });
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].collectionName, "_rateLimits");
+  assert.equal(calls[0].timestampField, "expiresAt");
+  assert.equal(calls[0].cutoffDate.toISOString(), "2026-03-10T12:00:00.000Z");
+  assert.equal(calls[1].collectionName, "schedulerLeases");
+  assert.equal(calls[1].timestampField, "leaseExpiresAt");
+  assert.equal(calls[1].cutoffDate.toISOString(), "2026-03-10T11:00:00.000Z");
+
+  assert.deepEqual(summary, {
+    rateLimitsDeleted: 4,
+    schedulerLeasesDeleted: 2,
+    totalDeleted: 6,
+    checkedAt: "2026-03-10T12:00:00.000Z",
+  });
+});
+
 test("toRateLimitDocId creates deterministic distributed key", () => {
   const key = __test.toRateLimitDocId({
     scope: "uid",

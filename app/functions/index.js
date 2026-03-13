@@ -28,6 +28,9 @@ const DEFAULT_CHECK_ALERTS_CONCURRENCY = 5;
 const DEFAULT_CHECK_ALERTS_MAX_BATCHES = 10;
 const DEFAULT_CHECK_ALERTS_LEASE_DURATION_MS = 55 * 1000;
 const CHECK_ALERTS_LEASE_ID = "checkAlerts";
+const DEFAULT_OPS_CLEANUP_BATCH_SIZE = 250;
+const DEFAULT_OPS_CLEANUP_MAX_BATCHES = 10;
+const DEFAULT_SCHEDULER_LEASE_RETENTION_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_NOTIFICATION_PAGE_SIZE = 20;
 const MAX_NOTIFICATION_PAGE_SIZE = 100;
 const SAFE_ERROR_MESSAGES = Object.freeze({
@@ -880,6 +883,77 @@ async function releaseSchedulerLease({
     });
     return true;
   });
+}
+
+async function deleteExpiredCollectionDocs({
+  firestore = admin.firestore(),
+  collectionName,
+  timestampField,
+  cutoffDate,
+  batchSize = DEFAULT_OPS_CLEANUP_BATCH_SIZE,
+  maxBatches = DEFAULT_OPS_CLEANUP_MAX_BATCHES,
+}) {
+  let deletedCount = 0;
+  const safeBatchSize = Math.max(1, batchSize);
+  const safeMaxBatches = Math.max(1, maxBatches);
+
+  for (let batchIndex = 0; batchIndex < safeMaxBatches; batchIndex += 1) {
+    const snapshot = await firestore.collection(collectionName)
+      .where(timestampField, "<=", cutoffDate)
+      .limit(safeBatchSize)
+      .get();
+    if (snapshot.empty) {
+      break;
+    }
+
+    await Promise.all(snapshot.docs.map((docSnapshot) => docSnapshot.ref.delete()));
+    deletedCount += snapshot.docs.length;
+
+    if (snapshot.docs.length < safeBatchSize) {
+      break;
+    }
+  }
+
+  return deletedCount;
+}
+
+async function cleanupOperationalCollections({
+  firestore = admin.firestore(),
+  nowMs = Date.now(),
+  batchSize = DEFAULT_OPS_CLEANUP_BATCH_SIZE,
+  maxBatches = DEFAULT_OPS_CLEANUP_MAX_BATCHES,
+  schedulerLeaseRetentionMs = DEFAULT_SCHEDULER_LEASE_RETENTION_MS,
+  cleanupDocs = deleteExpiredCollectionDocs,
+  log = logger,
+}) {
+  const nowDate = new Date(nowMs);
+  const schedulerLeaseCutoffDate = new Date(nowMs - schedulerLeaseRetentionMs);
+
+  const rateLimitsDeleted = await cleanupDocs({
+    firestore,
+    collectionName: RATE_LIMIT_COLLECTION,
+    timestampField: "expiresAt",
+    cutoffDate: nowDate,
+    batchSize,
+    maxBatches,
+  });
+  const schedulerLeasesDeleted = await cleanupDocs({
+    firestore,
+    collectionName: "schedulerLeases",
+    timestampField: "leaseExpiresAt",
+    cutoffDate: schedulerLeaseCutoffDate,
+    batchSize,
+    maxBatches,
+  });
+
+  const summary = {
+    rateLimitsDeleted,
+    schedulerLeasesDeleted,
+    totalDeleted: rateLimitsDeleted + schedulerLeasesDeleted,
+    checkedAt: nowDate.toISOString(),
+  };
+  log.info("cleanupOperationalCollections completed", summary);
+  return summary;
 }
 
 function buildNotificationDedupeKey({
@@ -1742,6 +1816,14 @@ exports.checkAlerts = onSchedule(
   },
 );
 
+exports.cleanupOperationalCollections = onSchedule(
+  {
+    schedule: "every 60 minutes",
+    timeZone: "Etc/UTC",
+  },
+  async () => cleanupOperationalCollections(),
+);
+
 exports.__test = {
   extractItems,
   normalizeInstrument,
@@ -1778,6 +1860,8 @@ exports.__test = {
   createIdempotentNotification,
   acquireSchedulerLease,
   releaseSchedulerLease,
+  deleteExpiredCollectionDocs,
+  cleanupOperationalCollections,
   computeNextCheckAtDate,
   getCheckAlertsConfig,
 };

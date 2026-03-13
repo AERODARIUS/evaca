@@ -172,6 +172,7 @@ firebase deploy --only functions,hosting,firestore:rules
 - Claves eToro se leen desde Secret Manager.
 - El frontend no llama eToro directamente; usa Functions.
 - `checkAlerts` marca una alerta como `triggered` al primer match (one-shot). Si querés alertas repetibles, se cambia a `active` tras notificar.
+- Colecciones operativas de alta rotación (`_rateLimits`, `schedulerLeases`) tienen limpieza programada y runbook en `docs/ttl-lifecycle-runbook.md`.
 
 ## Dependency patch protocol
 
