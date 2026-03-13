@@ -426,7 +426,7 @@
   - Priority: `P2`
   - Effort: `S`
 
-- [ ] `STORY-20260312-005` Decompose Cloud Functions monolith into domain modules
+- [x] `STORY-20260312-005` Decompose Cloud Functions monolith into domain modules
   - Type: `architecture`
   - Area: `backend`
   - Problem: `app/functions/index.js` has grown to ~1.7k lines and mixes HTTP/callable handlers, scheduler logic, eToro client code, validation, and rate limiting in one file.
