@@ -281,4 +281,24 @@ describe('alerts integration', () => {
     expect(page.items).toEqual([]);
     expect(page.nextPageToken).toBeNull();
   });
+
+  it('supports retry after transient list failure', async () => {
+    mockGetDocs
+      .mockRejectedValueOnce(new Error('transient read failure'))
+      .mockResolvedValueOnce({ docs: [] });
+
+    await expect(listAlertsPage('user-1', { pageSize: 2 })).rejects.toThrow('transient read failure');
+    await expect(listAlertsPage('user-1', { pageSize: 2 })).resolves.toEqual({
+      items: [],
+      nextPageToken: null,
+    });
+  });
+
+  it('surfaces mutation failures so UI can show actionable retry', async () => {
+    mockUpdateDoc.mockRejectedValueOnce(new Error('toggle failed'));
+    await expect(toggleAlertActive('alert-1', false)).rejects.toThrow('toggle failed');
+
+    mockDeleteDoc.mockRejectedValueOnce(new Error('delete failed'));
+    await expect(deleteAlert('alert-1')).rejects.toThrow('delete failed');
+  });
 });

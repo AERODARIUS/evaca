@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { onAuthStateChanged, signOut, User } from 'firebase/auth';
-import { Button, Card, Typography } from 'antd';
+import { Alert, Button, Card, Typography } from 'antd';
 import { auth } from './lib/firebase';
 import { LoginForm } from './components/LoginForm';
 import { AlertsTable } from './components/AlertsTable';
 import { AlertForm } from './components/AlertForm';
 import { AlertRow } from './types';
 import { listAlertsPage as fetchAlertsPage } from './lib/alerts';
+import { warnLog } from './lib/logger';
 
 const ALERTS_PAGE_SIZE = 20;
 
@@ -19,6 +20,7 @@ export function App() {
   const [isAlertsLoading, setIsAlertsLoading] = useState(false);
   const [isLoadingMoreAlerts, setIsLoadingMoreAlerts] = useState(false);
   const [alertsPageToken, setAlertsPageToken] = useState<string | null>(null);
+  const [alertsError, setAlertsError] = useState<string | null>(null);
 
   useEffect(() => {
     return onAuthStateChanged(auth, (nextUser) => {
@@ -46,6 +48,15 @@ export function App() {
       });
       setAlerts((current) => (shouldReset ? page.items : [...current, ...page.items]));
       setAlertsPageToken(page.nextPageToken);
+      setAlertsError(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      warnLog('alerts', 'Failed to load alerts', error);
+      setAlertsError(
+        shouldReset
+          ? `Unable to load alerts: ${message}.`
+          : `Unable to load more alerts: ${message}.`,
+      );
     } finally {
       if (shouldReset) {
         setIsAlertsLoading(false);
@@ -100,6 +111,19 @@ export function App() {
         }}
       />
 
+      {alertsError ? (
+        <Alert
+          type="error"
+          showIcon
+          message={alertsError}
+          action={
+            <Button size="small" onClick={() => void loadAlerts({ reset: true })}>
+              Retry
+            </Button>
+          }
+        />
+      ) : null}
+
       <AlertsTable
         alerts={alerts}
         expandedId={expandedId}
@@ -110,6 +134,7 @@ export function App() {
         isLoadingMore={isLoadingMoreAlerts}
         hasMore={Boolean(alertsPageToken)}
         onLoadMore={async () => loadAlerts({ reset: false })}
+        hasLoadError={Boolean(alertsError)}
       />
     </main>
   );

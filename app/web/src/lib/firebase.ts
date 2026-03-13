@@ -61,6 +61,7 @@ export const functions = getFunctions(app);
 try {
   const remoteConfig = getRemoteConfig(app);
   remoteConfig.settings = {
+    fetchTimeoutMillis: 10_000,
     minimumFetchIntervalMillis: import.meta.env.DEV ? 0 : 60 * 60 * 1000,
   };
   remoteConfig.defaultConfig = {

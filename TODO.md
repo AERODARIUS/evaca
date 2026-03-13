@@ -384,7 +384,7 @@
   - Priority: `P1`
   - Effort: `S`
 
-- [ ] `STORY-20260312-002` Add resilient UI error handling for alert workflows
+- [x] `STORY-20260312-002` Add resilient UI error handling for alert workflows
   - Type: `quality`
   - Area: `frontend`
   - Problem: `loadAlerts`, delete, and toggle flows can fail without consistent user-facing feedback or recoverable UI state, causing silent failure paths.
