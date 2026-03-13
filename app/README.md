@@ -87,6 +87,9 @@ Para `enforceAppCheck: true`, también configurá:
 VITE_FIREBASE_APPCHECK_SITE_KEY=<recaptcha-v3-site-key>
 ```
 
+Remote Config key for scoped verbose logging (default safe value: `false`):
+- `logs_verbose_enabled`
+
 ### Entornos frontend
 - Local: `web/.env` (no commitear secretos).
 - Preview/CI: `web/.env.preview` con proyecto Firebase de staging y variables inyectadas en pipeline.

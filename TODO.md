@@ -412,7 +412,7 @@
   - Priority: `P2`
   - Effort: `S`
 
-- [ ] `STORY-20260312-004` Add Remote Config log-scope feature flag
+- [x] `STORY-20260312-004` Add Remote Config log-scope feature flag
   - Type: `ops`
   - Area: `frontend`
   - Problem: Logging verbosity is not centrally controllable at runtime, so enabling detailed logs for troubleshooting requires code/config changes and can leak noisy logs when left on.

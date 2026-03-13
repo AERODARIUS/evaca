@@ -13,6 +13,7 @@ import {
   validateAlertDraft,
 } from '../lib/alertFormLogic';
 import { MarketDataClient, marketDataClient } from '../lib/marketDataClient';
+import { debugLog, warnLog } from '../lib/logger';
 
 export type NotificationChannel = 'inApp' | 'email' | 'push';
 
@@ -231,6 +232,7 @@ export function useAlertEditor({
     }
 
     const loadingFeedback = searchLoadingFeedback();
+    debugLog('alert-editor', 'Searching instruments', { searchText });
     setState((current) => ({
       ...current,
       error: null,
@@ -242,6 +244,7 @@ export function useAlertEditor({
 
     try {
       const items = await marketData.searchInstruments(searchText);
+      debugLog('alert-editor', 'Instrument search completed', { searchText, results: items.length });
       const feedback = searchResultsFeedback(searchText, items.length);
       setState((current) => ({
         ...current,
@@ -250,6 +253,7 @@ export function useAlertEditor({
         searchFeedback: feedback.message,
       }));
     } catch (searchError) {
+      warnLog('alert-editor', 'Instrument search failed', searchError);
       setState((current) => ({
         ...current,
         options: [],
@@ -262,12 +266,14 @@ export function useAlertEditor({
   };
 
   const loadRate = async (instrumentId: number) => {
+    debugLog('alert-editor', 'Loading instrument rate', { instrumentId });
     setState((current) => ({ ...current, error: null, isLoadingPrice: true }));
 
     try {
       const rate = await marketData.getInstrumentRate(instrumentId);
       setState((current) => ({ ...current, currentPrice: rate }));
     } catch (rateError) {
+      warnLog('alert-editor', 'Instrument rate load failed', rateError);
       const message = rateError instanceof Error ? rateError.message : 'Unable to load instrument rate right now.';
       setState((current) => ({ ...current, error: message, currentPrice: null }));
     } finally {
@@ -311,6 +317,10 @@ export function useAlertEditor({
     }
 
     setState((current) => ({ ...current, isSubmitting: true }));
+    debugLog('alert-editor', 'Submitting alert draft', {
+      mode: editing ? 'edit' : 'create',
+      hasInstrument: Boolean(state.instrument),
+    });
     const submitResult = await submitEditorDraft({
       editing,
       userId,
@@ -320,10 +330,12 @@ export function useAlertEditor({
     });
 
     if ('error' in submitResult) {
+      warnLog('alert-editor', 'Alert save failed', submitResult.error);
       setState((current) => ({ ...current, error: submitResult.error, isSubmitting: false }));
       return;
     }
 
+    debugLog('alert-editor', 'Alert saved successfully', { mode: editing ? 'edit' : 'create' });
     const resetState = buildInitialEditorState(null);
     setState({
       ...resetState,

@@ -3,6 +3,8 @@ import { initializeAppCheck, ReCaptchaV3Provider } from "firebase/app-check";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getFunctions } from "firebase/functions";
+import { fetchAndActivate, getBoolean, getRemoteConfig } from "firebase/remote-config";
+import { debugLog, setVerboseLoggingEnabled, warnLog } from "./logger";
 
 function getRequiredEnv(name: keyof ImportMetaEnv): string {
   const value = import.meta.env[name];
@@ -45,7 +47,8 @@ if (typeof window !== "undefined") {
       isTokenAutoRefreshEnabled: true,
     });
   } else {
-    console.warn(
+    warnLog(
+      "firebase",
       "Firebase App Check site key is missing. Set VITE_FIREBASE_APPCHECK_SITE_KEY to call protected functions.",
     );
   }
@@ -54,3 +57,27 @@ if (typeof window !== "undefined") {
 export const auth = getAuth(app);
 export const db = getFirestore(app);
 export const functions = getFunctions(app);
+
+try {
+  const remoteConfig = getRemoteConfig(app);
+  remoteConfig.settings = {
+    minimumFetchIntervalMillis: import.meta.env.DEV ? 0 : 60 * 60 * 1000,
+  };
+  remoteConfig.defaultConfig = {
+    logs_verbose_enabled: false,
+  };
+
+  void fetchAndActivate(remoteConfig)
+    .then(() => {
+      const verboseEnabled = getBoolean(remoteConfig, "logs_verbose_enabled");
+      setVerboseLoggingEnabled(verboseEnabled);
+      debugLog("remote-config", "Updated logs_verbose_enabled flag", { verboseEnabled });
+    })
+    .catch((error: unknown) => {
+      warnLog("remote-config", "Failed to fetch remote config for logging flag", error);
+      setVerboseLoggingEnabled(false);
+    });
+} catch (error) {
+  warnLog("remote-config", "Remote config initialization unavailable; verbose logging disabled", error);
+  setVerboseLoggingEnabled(false);
+}
