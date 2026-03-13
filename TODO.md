@@ -378,6 +378,11 @@
   - Proposed change: Enable/document Firestore TTL policies (or scheduled cleanup) for `_rateLimits` and `schedulerLeases`, add runbook verification, and monitor document volume.
   - Acceptance criteria:
     - `_rateLimits` documents are automatically removed after expiry via configured TTL or equivalent scheduled cleanup.
+    - `schedulerLeases` stale documents are bounded by TTL/cleanup policy with documented retention.
+    - Ops docs include how to verify TTL status and alert on abnormal collection growth.
+  - Dependencies: `none`
+  - Priority: `P1`
+  - Effort: `S`
 
 ## Access-Control Incident Follow-up (2026-03-13)
 
@@ -426,11 +431,56 @@
   - Dependencies: `STORY-20260313-001`
   - Priority: `P1`
   - Effort: `S`
-    - `schedulerLeases` stale documents are bounded by TTL/cleanup policy with documented retention.
-    - Ops docs include how to verify TTL status and alert on abnormal collection growth.
+
+## Alert UX Follow-up (2026-03-13)
+
+- [ ] `STORY-20260313-004` Replace interval minutes input with AntD `TimePicker`
+  - Type: `ux`
+  - Area: `web`
+  - Problem: The current `Check interval (minutes)` numeric input is low-context and easy to misconfigure, and it does not reflect the operational limitation that alert checks cannot run more frequently than every 30 minutes.
+  - Impact: Users can choose invalid or misleading intervals, form usability is weak, and engineering/support must explain a platform constraint that the UI should make obvious.
+  - Proposed change: Replace the raw minutes input with AntD `TimePicker`, enforce a minimum selectable interval of 30 minutes and a maximum of 24 hours, and add an adjacent informational message that explains the technical limitation and selected cadence in user-friendly terms.
+  - Acceptance criteria:
+    - The alert form uses AntD `TimePicker` instead of free-form numeric entry for check interval.
+    - The minimum selectable interval is 30 minutes and the maximum is 24 hours.
+    - The selected time is mapped to the existing alert interval payload without ambiguity.
+    - An informational helper message is shown next to or below the control explaining the 30-minute technical limitation.
+    - Validation and tests cover the new 30-minute minimum and 24-hour maximum.
   - Dependencies: `none`
   - Priority: `P1`
   - Effort: `S`
+
+- [ ] `STORY-20260313-005` Re-implement alert form checkboxes with AntD `Switch`
+  - Type: `ux`
+  - Area: `web`
+  - Problem: The alert form currently mixes checkbox-style controls with switch-style controls, creating inconsistent interaction semantics for binary settings and reducing visual coherence in the form.
+  - Impact: Users must mentally map similar on/off settings across different control types, which slows form completion and makes the UI feel less deliberate.
+  - Proposed change: Replace all checkbox-based toggles in the alert form with AntD `Switch` controls, keeping the current logical behavior while aligning labels, spacing, and accessibility semantics.
+  - Acceptance criteria:
+    - All existing checkbox controls in the alert form are replaced with AntD `Switch`.
+    - Current on/off behavior is preserved for each setting after the control migration.
+    - Labels and helper text clearly indicate what each switch enables or disables.
+    - Keyboard and screen-reader interaction remain supported after the migration.
+    - Component and interaction tests are updated to reflect `Switch` usage.
+  - Dependencies: `none`
+  - Priority: `P2`
+  - Effort: `S`
+
+- [ ] `STORY-20260313-006` Add delete-after-trigger switch and alert cleanup logic
+  - Type: `feature`
+  - Area: `alerts`
+  - Problem: Users cannot currently choose whether an alert should be automatically deleted after its condition is met, so one-shot workflows require manual cleanup and the form does not expose this lifecycle decision.
+  - Impact: Users accumulate stale alerts, operational intent is not captured at creation time, and the product cannot support simple self-cleaning alert workflows.
+  - Proposed change: Add a new AntD `Switch` on the alert form for delete-after-trigger behavior, persist that choice in the alert model, and implement the corresponding logic so triggered alerts marked for deletion are removed automatically.
+  - Acceptance criteria:
+    - The alert form exposes a dedicated `Switch` for delete-after-trigger behavior with clear explanatory copy.
+    - The selected value is saved as part of the alert document and loaded correctly in edit mode.
+    - Trigger-processing logic deletes alerts marked for delete-after-trigger once the condition is met and processing succeeds.
+    - Alerts not marked for delete-after-trigger keep their current post-trigger behavior.
+    - Tests cover create/edit persistence and triggered deletion behavior.
+  - Dependencies: `STORY-20260313-001`
+  - Priority: `P1`
+  - Effort: `M`
 
 - [x] `STORY-20260312-002` Add resilient UI error handling for alert workflows
   - Type: `quality`
