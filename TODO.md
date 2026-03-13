@@ -398,7 +398,7 @@
   - Priority: `P2`
   - Effort: `M`
 
-- [ ] `STORY-20260312-003` Consolidate duplicate CI workflow sources
+- [x] `STORY-20260312-003` Consolidate duplicate CI workflow sources
   - Type: `tech-debt`
   - Area: `ci-cd`
   - Problem: The repository contains active workflows in `/.github/workflows` and outdated duplicates in `app/.github/workflows`; CI/deploy commands are also chained into a single `run` step, making failing checks harder to triage.

@@ -21,7 +21,22 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: app/package-lock.json
-      - run: npm ci && npm run security:audit:ci && npm run functions:lint && npm run functions:test:coverage && npm run functions:test:rules && npm run web:test:a11y && npm run test && npm run build
+      - name: Install dependencies
+        run: npm ci
+      - name: Security audit
+        run: npm run security:audit:ci
+      - name: Functions lint
+        run: npm run functions:lint
+      - name: Functions test coverage
+        run: npm run functions:test:coverage
+      - name: Functions rules tests
+        run: npm run functions:test:rules
+      - name: Web accessibility tests
+        run: npm run web:test:a11y
+      - name: Web tests
+        run: npm run test
+      - name: Build app
+        run: npm run build
       - uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}

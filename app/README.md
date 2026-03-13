@@ -150,6 +150,12 @@ cd app
 firebase deploy --only functions,hosting,firestore:rules
 ```
 
+## CI workflows
+
+- Canonical workflow definitions live in `/.github/workflows`.
+- Workflow files under `app/.github/workflows` are deprecated and should not be used.
+- CI quality gates run as named steps: `security audit`, `functions lint`, `functions test coverage`, `functions rules tests`, `web accessibility tests`, `web tests`, and `build app`.
+
 ## Functions implementadas
 - `searchEtoroInstruments`
 - `getEtoroInstrumentRate`
