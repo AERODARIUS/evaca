@@ -378,6 +378,54 @@
   - Proposed change: Enable/document Firestore TTL policies (or scheduled cleanup) for `_rateLimits` and `schedulerLeases`, add runbook verification, and monitor document volume.
   - Acceptance criteria:
     - `_rateLimits` documents are automatically removed after expiry via configured TTL or equivalent scheduled cleanup.
+
+## Access-Control Incident Follow-up (2026-03-13)
+
+- [ ] `STORY-20260313-001` Restore owner-scoped alert CRUD with emulator-backed authorization tests
+  - Type: `architecture`
+  - Area: `security`
+  - Problem: Users are receiving `Unable to load alerts: Missing or insufficient permissions.` and `Save failed: Missing or insufficient permissions.` even though the product intent is owner-only visibility and editing. Current coverage validates rule shape and some client integration behavior, but it does not prove the full contract across Firebase Auth, Firestore rules, and the web alert payload/query paths.
+  - Impact: Users cannot reliably create, view, or edit their own alerts, and the tenant-isolation model is effectively unverified in the runtime path that matters.
+  - Proposed change: Add emulator-backed end-to-end authorization coverage for alert list/create/update/delete flows using authenticated owner, authenticated non-owner, and unauthenticated clients; align any failing rule/query/payload contract so signed-in owners can CRUD only their own alerts.
+  - Acceptance criteria:
+    - A signed-in user can create a new alert whose `userId` matches `request.auth.uid`.
+    - A signed-in user can list, update, enable/disable, and delete only their own alerts.
+    - A signed-in user cannot read or mutate another user’s alerts, even by direct document id access.
+    - An unauthenticated client cannot list or mutate alerts.
+    - CI runs emulator-backed authorization tests for the exact web query shape (`where userId == uid` + ordered pagination) and write payloads used by the app.
+  - Dependencies: `STORY-20260311-003`
+  - Priority: `P0`
+  - Effort: `M`
+
+- [ ] `STORY-20260313-002` Backfill and normalize legacy alert documents to the enforced rules contract
+  - Type: `data`
+  - Area: `infra`
+  - Problem: Firestore rules now enforce a strict alert document shape, including ownership fields and scheduling timestamps. Any legacy or manually inserted alert documents missing required fields or containing stale condition values can fail owner reads/updates and surface as permission errors that look identical to auth failures.
+  - Impact: Existing customers can be locked out of their historical alerts after rules hardening, and support cannot distinguish bad data from real authorization defects.
+  - Proposed change: Audit existing `alerts` documents for rule-contract drift (`userId`, `createdAt`, `updatedAt`, `nextCheckAt`, allowed condition values), add a backfill/migration script for repairable records, and define a quarantine/report path for irrecoverable rows.
+  - Acceptance criteria:
+    - A repeatable audit identifies alert documents that violate the current rules contract.
+    - Repairable alerts are backfilled with compliant values without changing ownership.
+    - Irrecoverable alerts are reported with document ids and failure reason for manual remediation.
+    - Post-migration verification confirms existing owners can read and edit their surviving alerts.
+  - Dependencies: `STORY-20260313-001`
+  - Priority: `P1`
+  - Effort: `M`
+
+- [ ] `STORY-20260313-003` Add client-side auth/permission diagnostics and safe loading gates
+  - Type: `ux`
+  - Area: `web`
+  - Problem: The frontend currently collapses Firestore authorization failures into generic load/save errors, which makes it difficult to distinguish between missing authentication, wrong Firebase project configuration, stale sessions, and actual rule denials. This slows incident response and obscures whether the failure is systemic or user-specific.
+  - Impact: Support and engineering lose time during incidents, and users receive a dead-end error instead of actionable guidance or automatic recovery.
+  - Proposed change: Gate alert reads/writes on confirmed auth readiness and current user presence, capture structured diagnostics for Firebase auth/project/rules failures, and present actionable error states with retry/re-auth guidance.
+  - Acceptance criteria:
+    - Alert queries and mutations do not execute before auth readiness and confirmed user state.
+    - Permission-denied, unauthenticated, and configuration errors are logged with enough context to triage environment vs. tenant issues.
+    - The UI shows differentiated guidance for re-login vs. retry vs. support escalation.
+    - Support/debug logs include the authenticated uid, Firebase project id, and operation name without exposing secrets.
+  - Dependencies: `STORY-20260313-001`
+  - Priority: `P1`
+  - Effort: `S`
     - `schedulerLeases` stale documents are bounded by TTL/cleanup policy with documented retention.
     - Ops docs include how to verify TTL status and alert on abnormal collection growth.
   - Dependencies: `none`
